@@ -1,10 +1,12 @@
 ################################################################################
 ## Inheriting configs from ACK
-. ${ROOT_DIR}/msm-kernel/build.config.common
-. ${ROOT_DIR}/msm-kernel/build.config.aarch64
+. ${ROOT_DIR}/private/msm-qcom-cw/build.config.common
+. ${ROOT_DIR}/private/msm-qcom-cw/build.config.aarch64
 
 ################################################################################
 ## Variant setup
+VARIANT="consolidate"
+TARGET=monaco
 MSM_ARCH=monaco
 VARIANTS=(consolidate gki)
 [ -z "${VARIANT}" ] && VARIANT=consolidate
