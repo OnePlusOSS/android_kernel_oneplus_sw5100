@@ -25,7 +25,7 @@ MODULES_LIST_ORDER="1"
 
 KERNEL_SRC=vendor/qcom/opensource/monaco
 EXT_MODULES="
-vendor/nxp/opensource/monaco/drivers
+vendor/nxp/opensource/monaco/driver
 ${KERNEL_SRC}/display-drivers
 ${KERNEL_SRC}/display-drivers/msm
 ${KERNEL_SRC}/touch-drivers
