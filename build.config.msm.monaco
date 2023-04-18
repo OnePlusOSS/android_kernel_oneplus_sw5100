@@ -25,7 +25,7 @@ MODULES_LIST_ORDER="1"
 
 KERNEL_SRC=vendor/qcom/opensource/monaco
 EXT_MODULES="
-#private/msm-qcom-cw-modules/display-drivers
+vendor/nxp/opensource/monaco/drivers
 ${KERNEL_SRC}/display-drivers
 ${KERNEL_SRC}/display-drivers/msm
 ${KERNEL_SRC}/touch-drivers
@@ -35,8 +35,6 @@ ${KERNEL_SRC}/video-driver
 ${KERNEL_SRC}datarmnet/core
 ${KERNEL_SRC}datarmnet-ext/wlan
 ${KERNEL_SRC}dataipa/drivers/platform/msm
-#${KERNEL_SRC}/mm-drivers
-#${KERNEL_SRC}/mmrm-driver
 ${KERNEL_SRC}/bt-kernel
 ${KERNEL_SRC}/wlan
 ${KERNEL_SRC}/wlan/qcacld-3.0
