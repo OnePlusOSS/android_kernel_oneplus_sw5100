@@ -36,7 +36,7 @@ ${KERNEL_SRC}/msm-qcom-cw-modules/data/datarmnet-ext/wlan
 ${KERNEL_SRC}/msm-qcom-cw-modules/data/dataipa/drivers/platform/msm
 ${KERNEL_SRC}/msm-qcom-cw-modules/driver
 ${KERNEL_SRC}/msm-qcom-cw-modules/bt-kernel
-${KERNEL_SRC}/msm-qcom-cw-modules/audio-kernel-ar
+${KERNEL_SRC}/msm-qcom-cw-modules/audio-kernel
 "
 #${KERNEL_SRC}/msm-qcom-cw-modules/wlan
 #${KERNEL_SRC}/msm-qcom-cw-modules/qcacld-3.0
