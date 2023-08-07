@@ -27,6 +27,7 @@
 #include "schgm-flashlite.h"
 
 static struct power_supply_desc usb_psy_desc;
+int DEBUG_TEMP = 200;
 
 static const struct smb_base_address smb_base[] = {
 	[PM2250] = {
@@ -725,11 +726,14 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		rc = smblite_lib_get_prop_batt_iterm(chg, val);
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
+#if 0 //VENDOR_EDIT
 		if (chg->typec_mode == QTI_POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
 			val->intval = DEBUG_ACCESSORY_TEMP_DECIDEGC;
 		else
 			rc = smblite_lib_get_prop_from_bms(chg,
 						SMB5_QG_TEMP, &val->intval);
+#endif
+		val->intval = DEBUG_TEMP;
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
@@ -779,6 +783,11 @@ static int smblite_batt_set_prop(struct power_supply *psy,
 	struct smb_charger *chg = power_supply_get_drvdata(psy);
 
 	switch (prop) {
+//#VENDOR_EDIT
+	case POWER_SUPPLY_PROP_TEMP:
+		DEBUG_TEMP = val->intval;
+		break;
+//#ENDIF
 	case POWER_SUPPLY_PROP_STATUS:
 		rc = smblite_lib_set_prop_batt_status(chg, val);
 		break;
@@ -821,6 +830,9 @@ static int smblite_batt_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
+//#VENDOR_EDIT temp
+	case POWER_SUPPLY_PROP_TEMP:
+//#ENDIF
 	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
 		rc = 1;
 		break;

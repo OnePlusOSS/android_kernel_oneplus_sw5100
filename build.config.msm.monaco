@@ -1,10 +1,12 @@
 ################################################################################
 ## Inheriting configs from ACK
-. ${ROOT_DIR}/msm-kernel/build.config.common
-. ${ROOT_DIR}/msm-kernel/build.config.aarch64
+. ${ROOT_DIR}/kernel/msm-5.15/build.config.common
+. ${ROOT_DIR}/kernel/msm-5.15/build.config.aarch64
 
 ################################################################################
 ## Variant setup
+VARIANT="consolidate"
+TARGET=monaco
 MSM_ARCH=monaco
 VARIANTS=(consolidate gki)
 [ -z "${VARIANT}" ] && VARIANT=consolidate
@@ -20,6 +22,26 @@ SUPER_IMAGE_SIZE=0x10000000
 TRIM_UNUSED_MODULES=1
 BUILD_INIT_BOOT_IMG=1
 MODULES_LIST_ORDER="1"
+
+KERNEL_SRC=kernel
+EXT_MODULES="
+${KERNEL_SRC}/msm-qcom-cw-modules/display-drivers
+${KERNEL_SRC}/msm-qcom-cw-modules/display-drivers/msm
+${KERNEL_SRC}/msm-qcom-cw-modules/touch-drivers
+${KERNEL_SRC}/msm-qcom-cw-modules/securemsm-kernel
+${KERNEL_SRC}/msm-qcom-cw-modules/graphics-kernel
+${KERNEL_SRC}/msm-qcom-cw-modules/video-driver
+${KERNEL_SRC}/msm-qcom-cw-modules/data/datarmnet/core
+${KERNEL_SRC}/msm-qcom-cw-modules/data/datarmnet-ext/wlan
+${KERNEL_SRC}/msm-qcom-cw-modules/data/dataipa/drivers/platform/msm
+${KERNEL_SRC}/msm-qcom-cw-modules/driver
+${KERNEL_SRC}/msm-qcom-cw-modules/bt-kernel
+${KERNEL_SRC}/msm-qcom-cw-modules/audio-kernel
+"
+#${KERNEL_SRC}/msm-qcom-cw-modules/wlan
+#${KERNEL_SRC}/msm-qcom-cw-modules/qcacld-3.0
+
+WLAN_WEAR_CHIPSET=qca_cld3
 
 [ -z "${DT_OVERLAY_SUPPORT}" ] && DT_OVERLAY_SUPPORT=1
 
