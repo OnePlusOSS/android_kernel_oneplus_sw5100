@@ -1,0 +1,10 @@
+#
+# OPLUS NFC TEST devices
+#
+
+config NFC_DUMMY_DEVICE
+	tristate "OPLUS NFC TEST devices"
+	help
+	  This adds support to use oplus mcu nfc test driver.
+
+	  If unsure, say N.

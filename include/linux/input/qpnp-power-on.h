@@ -60,6 +60,20 @@ enum pon_restart_reason {
 	PON_RESTART_REASON_NON_SILENT			= 0x0b,
 	PON_RESTART_REASON_FORCED_SILENT		= 0x0c,
 	PON_RESTART_REASON_FORCED_NON_SILENT	= 0x0d,
+	PON_RESTART_REASON_SILENCE                      = 0x21,
+	PON_RESTART_REASON_SAU                          = 0x22,
+	PON_RESTART_REASON_RF                           = 0x23,
+	PON_RESTART_REASON_WLAN                         = 0x24,
+	PON_RESTART_REASON_MOS                          = 0x25,
+	PON_RESTART_REASON_FACTORY                      = 0x26,
+	PON_RESTART_REASON_KERNEL                       = 0x27,
+	PON_RESTART_REASON_MODEM                        = 0x28,
+	PON_RESTART_REASON_ANDROID                      = 0x29,
+	PON_RESTART_REASON_SAFE                         = 0x2A,
+	PON_RESTART_REASON_SBL_DDRTEST                  = 0x2B,
+	PON_RESTART_REASON_SBL_DDR_CUS                  = 0x2C,
+	PON_RESTART_REASON_MEM_AGING                    = 0x2D,
+	PON_RESTART_REASON_NORMAL                       = 0x3E,
 };
 
 #if IS_ENABLED(CONFIG_INPUT_QPNP_POWER_ON)

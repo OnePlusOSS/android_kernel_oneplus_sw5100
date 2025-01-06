@@ -677,6 +677,7 @@ static int seb_init(struct seb_priv *dev)
 	seb_drv = &dev->lhndl;
 	mutex_init(&dev->glink_mutex);
 	mutex_init(&dev->seb_state_mutex);
+	mutex_init(&seb_api_mutex);
 
 	mutex_init(&seb_api_mutex);
 

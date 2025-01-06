@@ -372,6 +372,7 @@ struct bt_skb_cb {
 	u8 force_active;
 	u16 expect;
 	u8 incoming:1;
+	u8 send_cn:7;
 	union {
 		struct l2cap_ctrl l2cap;
 		struct sco_ctrl sco;
@@ -383,6 +384,7 @@ struct bt_skb_cb {
 #define hci_skb_pkt_type(skb) bt_cb((skb))->pkt_type
 #define hci_skb_expect(skb) bt_cb((skb))->expect
 #define hci_skb_opcode(skb) bt_cb((skb))->hci.opcode
+#define hci_skb_send_cn(skb) bt_cb((skb))->send_cn
 
 static inline struct sk_buff *bt_skb_alloc(unsigned int len, gfp_t how)
 {

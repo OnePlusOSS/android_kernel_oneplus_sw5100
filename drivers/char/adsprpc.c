@@ -78,21 +78,6 @@
 #define DEBUGFS_SIZE 3072
 #define PID_SIZE 10
 
-#define AUDIO_PDR_ADSP_DTSI_PROPERTY_NAME        "qcom,fastrpc-adsp-audio-pdr"
-#define AUDIO_PDR_SERVICE_LOCATION_CLIENT_NAME   "audio_pdr_adsprpc"
-#define AUDIO_PDR_ADSP_SERVICE_NAME              "avs/audio"
-#define ADSP_AUDIOPD_NAME                        "msm/adsp/audio_pd"
-
-#define SENSORS_PDR_ADSP_DTSI_PROPERTY_NAME        "qcom,fastrpc-adsp-sensors-pdr"
-#define SENSORS_PDR_ADSP_SERVICE_LOCATION_CLIENT_NAME   "sensors_pdr_adsprpc"
-#define SENSORS_PDR_ADSP_SERVICE_NAME              "tms/servreg"
-#define ADSP_SENSORPD_NAME                       "msm/adsp/sensor_pd"
-
-#define SENSORS_PDR_SLPI_DTSI_PROPERTY_NAME      "qcom,fastrpc-slpi-sensors-pdr"
-#define SENSORS_PDR_SLPI_SERVICE_LOCATION_CLIENT_NAME "sensors_pdr_sdsprpc"
-#define SENSORS_PDR_SLPI_SERVICE_NAME            SENSORS_PDR_ADSP_SERVICE_NAME
-#define SLPI_SENSORPD_NAME                       "msm/slpi/sensor_pd"
-
 #define FASTRPC_SECURE_WAKE_SOURCE_CLIENT_NAME		"adsprpc-secure"
 #define FASTRPC_NON_SECURE_WAKE_SOURCE_CLIENT_NAME	"adsprpc-non_secure"
 
@@ -841,7 +826,10 @@ static int fastrpc_mmap_find(struct fastrpc_file *fl, int fd,
 
 	if ((va + len) < va)
 		return -EFAULT;
-	if (mflags == ADSP_MMAP_DMA_BUFFER) {
+	if (mflags == ADSP_MMAP_HEAP_ADDR ||
+				 mflags == ADSP_MMAP_REMOTE_HEAP_ADDR) {
+		return -EFAULT;
+	} else if (mflags == ADSP_MMAP_DMA_BUFFER) {
 		hlist_for_each_entry_safe(map, n, &fl->maps, hn) {
 			if (map->buf == buf) {
 				if (refs) {
@@ -941,6 +929,8 @@ static int fastrpc_mmap_remove(struct fastrpc_file *fl, int fd, uintptr_t va,
 			map->refs == 1 &&
 			/* Remove if only one reference map and no context map */
 			!map->ctx_refs &&
+			/* Remove map only if it isn't being used by DSP */
+			!map->dma_handle_refs &&
 			/* Skip unmap if it is fastrpc shell memory */
 			!map->is_filemap) {
 			match = map;
@@ -980,8 +970,9 @@ static void fastrpc_mmap_free(struct fastrpc_mmap *map, uint32_t flags)
 	if (map->flags == ADSP_MMAP_HEAP_ADDR ||
 				map->flags == ADSP_MMAP_REMOTE_HEAP_ADDR) {
 		spin_lock_irqsave(&me->hlock, irq_flags);
-		map->refs--;
-		if (!map->refs && !map->is_persistent && !map->ctx_refs)
+		if (map->refs)
+			map->refs--;
+		if (!map->refs && !map->is_persistent)
 			hlist_del_init(&map->hn);
 		if (map->refs > 0) {
 			ADSPRPC_WARN(
@@ -994,10 +985,14 @@ static void fastrpc_mmap_free(struct fastrpc_mmap *map, uint32_t flags)
 			map->in_use = false;
 		spin_unlock_irqrestore(&me->hlock, irq_flags);
 	} else {
-		map->refs--;
-		if (!map->refs && !map->ctx_refs)
+		if (map->refs)
+			map->refs--;
+		/* flags is passed as 1 during fastrpc_file_free (ie process exit),
+		 * so that maps will be cleared even though references are present.
+		 */
+		if (flags || (!map->refs && !map->ctx_refs && !map->dma_handle_refs))
 			hlist_del_init(&map->hn);
-		if (map->refs > 0 && !flags)
+		else
 			return;
 	}
 	if (map->flags == ADSP_MMAP_HEAP_ADDR ||
@@ -2397,12 +2392,13 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 					FASTRPC_ATTR_NOVA, 0, 0, dmaflags,
 					&ctx->maps[i]);
 		if (!err && ctx->maps[i])
-			ctx->maps[i]->ctx_refs++;
+			ctx->maps[i]->dma_handle_refs++;
 		if (err) {
 			for (j = bufs; j < i; j++) {
-				if (ctx->maps[j] && ctx->maps[j]->ctx_refs)
-					ctx->maps[j]->ctx_refs--;
-				fastrpc_mmap_free(ctx->maps[j], 0);
+				if (ctx->maps[j] && ctx->maps[j]->dma_handle_refs) {
+					ctx->maps[j]->dma_handle_refs--;
+					fastrpc_mmap_free(ctx->maps[j], 0);
+				}
 			}
 			mutex_unlock(&ctx->fl->map_mutex);
 			goto bail;
@@ -2553,14 +2549,32 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 		rpra[i].buf.pv = buf;
 	}
 	PERF_END);
+	/* Since we are not holidng map_mutex during get args whole time
+	 * it is possible that dma handle map may be removed by some invalid
+	 * fd passed by DSP. Inside the lock check if the map present or not
+	 */
+	mutex_lock(&ctx->fl->map_mutex);
 	for (i = bufs; i < bufs + handles; ++i) {
-		struct fastrpc_mmap *map = ctx->maps[i];
-
-		if (map) {
-			pages[i].addr = map->phys;
-			pages[i].size = map->size;
+		struct fastrpc_mmap *mmap = NULL;
+		/* check if map  was created */
+		if (ctx->maps[i]) {
+			/* check if map still exist */
+			if (!fastrpc_mmap_find(ctx->fl, ctx->fds[i], NULL, 0, 0,
+				0, 0, &mmap)) {
+				if (mmap) {
+					pages[i].addr = mmap->phys;
+					pages[i].size = mmap->size;
+				}
+			} else {
+				/* map already freed by some other call */
+				mutex_unlock(&ctx->fl->map_mutex);
+				ADSPRPC_ERR("could not find map associated with dma handle fd %d\n",
+					ctx->fds[i]);
+				goto bail;
+			}
 		}
 	}
+	mutex_unlock(&ctx->fl->map_mutex);
 	fdlist = (uint64_t *)&pages[bufs + handles];
 	crclist = (uint32_t *)&fdlist[M_FDLIST];
 	/* reset fds, crc and early wakeup hint memory */
@@ -2761,9 +2775,10 @@ static int put_args(uint32_t kernel, struct smq_invoke_ctx *ctx,
 			break;
 		if (!fastrpc_mmap_find(ctx->fl, (int)fdlist[i], NULL, 0, 0,
 					0, 0, &mmap)) {
-			if (mmap && mmap->ctx_refs)
-				mmap->ctx_refs--;
-			fastrpc_mmap_free(mmap, 0);
+			if (mmap && mmap->dma_handle_refs) {
+				mmap->dma_handle_refs = 0;
+				fastrpc_mmap_free(mmap, 0);
+			}
 		}
 	}
 	mutex_unlock(&ctx->fl->map_mutex);
@@ -6195,7 +6210,7 @@ static int fastrpc_device_open(struct inode *inode, struct file *filp)
 
 static int fastrpc_get_process_gids(struct gid_list *gidlist)
 {
-	struct group_info *group_info = get_current_groups();
+	struct group_info *group_info = current_cred()->group_info;
 	int i = 0, err = 0, num_gids = group_info->ngroups + 1;
 	unsigned int *gids = NULL;
 
@@ -6513,7 +6528,7 @@ bail:
 	return err;
 }
 
-static int fastrpc_check_pd_status(struct fastrpc_file *fl, char *sloc_name)
+int fastrpc_check_pd_status(struct fastrpc_file *fl, char *sloc_name)
 {
 	int err = 0, session = -1, cid = -1;
 	struct fastrpc_apps *me = &gfa;

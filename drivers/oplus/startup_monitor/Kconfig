@@ -1,0 +1,5 @@
+config OPLUS_FEATURE_STARTUP_MONITOR
+	tristate "startup_monitor"
+	default n
+	help
+             define this config to enable startup_monitor.

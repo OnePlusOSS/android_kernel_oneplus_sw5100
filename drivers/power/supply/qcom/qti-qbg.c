@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"QBG_K: %s: " fmt, __func__
@@ -119,6 +119,43 @@
 #define VADC_ANA_PARAM_4			0x46
 
 static int qbg_debug_mask;
+#define VBAT_CUTOFF_TO_EMPTY_GAP_MV			100
+#define OPLUS_HIGH_TEMP_AGING_TEST_MAX_VOL	4510000
+#define OPLUS_LOWEST_TEMP			 -80
+extern bool charger_log_enable;
+extern int factoraging_control;
+extern int chg_limit_lcdon_i;
+
+extern int g_vbat_cutoff_uv;
+extern int high_temp;
+/*get battery cutoff voltage by deep discharge count*/
+extern unsigned int get_deep_dischrg_count(void);
+extern bool isStarRiverWatch(void);
+extern void oplus_trigger_recharge(void);
+
+#define DEEP_DISCHRG_COUNT_THRESHOLD_1		50
+#define DEEP_DISCHRG_COUNT_THRESHOLD_2		150
+#define VBAT_CUTOFF_OWW251_0_MV				3100
+#define VBAT_CUTOFF_OWW251_1_MV				3150
+#define VBAT_CUTOFF_OWW251_2_MV				3200
+int get_cutoffvol_by_ddcount(void)
+{
+	int cutoffvol = 0;
+	unsigned int deep_dischrg_count = get_deep_dischrg_count();
+
+	if (deep_dischrg_count < DEEP_DISCHRG_COUNT_THRESHOLD_1) {
+		cutoffvol = VBAT_CUTOFF_OWW251_0_MV;
+	}
+	else if (deep_dischrg_count < DEEP_DISCHRG_COUNT_THRESHOLD_2) {
+		cutoffvol = VBAT_CUTOFF_OWW251_1_MV;
+	}
+	else {
+		cutoffvol = VBAT_CUTOFF_OWW251_2_MV;
+	}
+
+	pr_err("dd_count %ld, cutoffvol %d\n", deep_dischrg_count, cutoffvol);
+	return cutoffvol;
+}
 
 enum qbg_esr_fcc_reduction {
 	ESR_FCC_150MA = 0x6,
@@ -261,8 +298,8 @@ static void qbg_notify_charger(struct qti_qbg *chip)
 		return;
 	}
 
-	if (chip->default_iterm_ma != -EINVAL) {
-		prop.intval = chip->default_iterm_ma;
+	if (chip->iterm_ma != -EINVAL) {
+		prop.intval = chip->iterm_ma;
 		rc = power_supply_set_property(chip->batt_psy,
 				POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT, &prop);
 		if (rc < 0) {
@@ -341,8 +378,7 @@ static int qbg_charge_full_update(struct qti_qbg *chip)
 		recharge_soc = val;
 	}
 	chip->recharge_soc = recharge_soc;
-
-qbg_dbg(chip, QBG_DEBUG_STATUS, "msoc=%d sys_soc:%d charge_done:%d charge_status=%d recharge_soc=%d in_recharge:%u\n",
+	qbg_dbg(chip, QBG_DEBUG_STATUS, "msoc=%d sys_soc:%d charge_done:%d charge_status=%d recharge_soc=%d in_recharge:%u\n",
 			chip->soc, chip->sys_soc, chip->charge_done,
 			chip->charge_status, chip->recharge_soc, chip->in_recharge);
 
@@ -382,66 +418,6 @@ qbg_dbg(chip, QBG_DEBUG_STATUS, "msoc=%d sys_soc:%d charge_done:%d charge_status
 	}
 
 	return rc;
-}
-
-static void status_change_work(struct work_struct *work)
-{
-	struct qti_qbg *chip = container_of(work, struct qti_qbg,
-						status_change_work);
-	union power_supply_propval prop = {0, };
-	int rc, val, charger_present = 0;
-
-	if (!is_batt_available(chip))
-		return;
-
-	if (!is_usb_available(chip))
-		return;
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_CHARGE_TYPE, &prop);
-	if (rc < 0)
-		pr_err("Failed to get charge-type, rc=%d\n", rc);
-	else
-		chip->charge_type = prop.intval;
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_STATUS, &prop);
-	if (rc < 0)
-		pr_err("Failed to get charger status, rc=%d\n", rc);
-	else
-		chip->charge_status = prop.intval;
-
-	rc = qbg_read_iio_chan(chip, CHARGE_DONE, &val);
-	if (rc < 0)
-		pr_err("Failed to get charge done status, rc=%d\n", rc);
-	else
-		chip->charge_done = val;
-
-	rc = power_supply_get_property(chip->usb_psy,
-			POWER_SUPPLY_PROP_PRESENT, &prop);
-	if (rc < 0)
-		pr_err("Failed to get charger present, rc=%d\n", rc);
-	else
-		charger_present = prop.intval;
-
-	qbg_dbg(chip, QBG_DEBUG_STATUS, "charge_status=%d charge_done=%d charger_present:%d\n",
-			chip->charge_status, chip->charge_done, chip->charger_present);
-
-	/*
-	 * Set FCC and iterm back to default value on charger removal
-	 * as they could have been updated during recharge.
-	 */
-	if (chip->charger_present && !charger_present) {
-		qbg_notify_charger(chip);
-		chip->in_recharge = false;
-	}
-	chip->charger_present = charger_present;
-
-	rc = qbg_charge_full_update(chip);
-	if (rc < 0) {
-		pr_err("Failed in charge full update, rc=%d\n", rc);
-		return;
-	}
 }
 
 static int qbg_get_max_fifo_count(struct qti_qbg *chip)
@@ -527,6 +503,8 @@ static void update_ocv_for_boost(struct qti_qbg *chip)
 		(u8 *)&ocv_for_boost, 1);
 }
 
+extern bool ponsoc_inited;
+extern void oplus_init_ponsoc(int ponsoc);
 static void process_udata_work(struct work_struct *work)
 {
 	struct qti_qbg *chip = container_of(work, struct qti_qbg, udata_work);
@@ -603,10 +581,20 @@ static void process_udata_work(struct work_struct *work)
 
 	__pm_relax(chip->qbg_ws);
 
-	qbg_dbg(chip, QBG_DEBUG_STATUS, "udata update: batt_soc=%d sys_soc=%d soc=%d qbg_esr=%d\n",
-		(chip->batt_soc != INT_MIN) ? chip->batt_soc : -EINVAL,
-		(chip->sys_soc != INT_MIN) ? chip->sys_soc : -EINVAL,
-		chip->soc, chip->esr);
+	if (!ponsoc_inited) {
+		oplus_init_ponsoc(chip->soc);
+	}
+
+	if ((chip->charge_status == POWER_SUPPLY_STATUS_FULL) && (chip->sys_soc < DEFAULT_RECHARGE_SOC))
+	{
+		pr_info("recharge for sys_soc drops\n");
+		oplus_trigger_recharge();
+	}
+
+	pr_info("soc update: batt_soc=%d sys_soc=%d soc=%d qbg_esr=%d\n",
+			(chip->batt_soc != INT_MIN) ? chip->batt_soc : -EINVAL,
+			(chip->sys_soc != INT_MIN) ? chip->sys_soc : -EINVAL,
+			chip->soc, chip->esr);
 }
 
 static int qbg_decode_fifo_data(struct fifo_data fifo, unsigned int *vbat1,
@@ -667,6 +655,18 @@ close_time:
 	chip->rtc = NULL;
 
 	return rc;
+}
+
+struct qti_qbg *qbg_chip = NULL;
+extern int (*oplus_get_rtc_time)(unsigned long *rtc_time);
+int qbg_get_rtc_time(unsigned long* rtc_time)
+{
+	if ((!rtc_time) || (!qbg_chip)) {
+		pr_err("oplus_get_rtc_time Invalid Pointer\n");
+		return -EINVAL;
+	}
+
+	return get_rtc_time(qbg_chip, (time64_t *)rtc_time);
 }
 
 #define BAT_THERM_CAL_DENOM		2080
@@ -900,6 +900,16 @@ static int qbg_clear_fifo_data(struct qti_qbg *chip)
 	return 0;
 }
 
+static int qbg_enable_data_full_int(struct qti_qbg *chip, bool enable)
+{
+	/* Writing 0x80 while FIFO is full will raise the interrupt */
+	u8 val = (enable ? 0x80 : 0x00);
+
+	return qbg_sdam_write(chip,
+			QBG_SDAM_BASE(chip, SDAM_CTRL0) + QBG_SDAM_INT_TEST1,
+			&val, 1);
+}
+
 static int qbg_init_sdam(struct qti_qbg *chip)
 {
 	int rc = 0;
@@ -1013,6 +1023,7 @@ static int qbg_handle_fast_char(struct qti_qbg *chip)
 		if (*data) {
 			qbg_dbg(chip, QBG_DEBUG_STATUS, "skip_esr=1 in_fast_char=%d\n",
 				chip->in_fast_char);
+			kfree(data);
 
 			if (chip->in_fast_char) {
 				rc = qbg_force_fast_char(chip, false);
@@ -1023,9 +1034,12 @@ static int qbg_handle_fast_char(struct qti_qbg *chip)
 				}
 				chip->in_fast_char = false;
 			}
-
 			return 0;
 		}
+		else {
+			kfree(data);
+		}
+
 	}
 
 	if (chip->in_fast_char) {
@@ -1126,8 +1140,8 @@ static int qbg_notifier_cb(struct notifier_block *nb,
 		return NOTIFY_OK;
 
 	if ((strcmp(psy->desc->name, "battery") == 0) ||
-	    (strcmp(psy->desc->name, "usb") == 0) ||
-	    (strcmp(psy->desc->name, "dc") == 0)) {
+		(strcmp(psy->desc->name, "usb") == 0) ||
+		(strcmp(psy->desc->name, "dc") == 0)) {
 		schedule_work(&chip->status_change_work);
 	}
 
@@ -1207,6 +1221,8 @@ clean:
 	return rc;
 }
 
+struct qbg_step_chg_jeita_params *step_chg_jeita;
+unsigned int step_fcc_chg_value_temp[6];
 #define QBG_DEFAULT_JEITA_FULL_FV_10NV		420000000
 #define QBG_DEFAULT_BATTERY_BETA		4250
 #define QBG_DEFAULT_BATTERY_THERM_KOHM		100
@@ -1214,7 +1230,7 @@ clean:
 #define QBG_DEFAULT_JEITA_COOL_ADC_DATA		0x5314 /* COOL = 5 DegC */
 static int parse_step_chg_jeita_params(struct qti_qbg *chip, struct device_node *profile_node)
 {
-	struct qbg_step_chg_jeita_params *step_chg_jeita;
+	//struct qbg_step_chg_jeita_params *step_chg_jeita; //move to global
 	bool soc_based_step_chg = false;
 	bool ocv_based_step_chg = false;
 	int rc;
@@ -1286,6 +1302,12 @@ static int parse_step_chg_jeita_params(struct qti_qbg *chip, struct device_node 
 	if (rc < 0)
 		pr_debug("Failed to read qcom,jeita-fv-ranges from battery profile, rc=%d\n",
 					rc);
+	step_chg_jeita->jeita_fcc_cfg.data[0].low_threshold = OPLUS_LOWEST_TEMP;
+	step_chg_jeita->jeita_fv_cfg.data[0].low_threshold = OPLUS_LOWEST_TEMP;
+#if defined(HIGH_TEMP_AGING_TEST)
+	step_chg_jeita->jeita_fv_cfg.data[2].value = OPLUS_HIGH_TEMP_AGING_TEST_MAX_VOL;
+	pr_err("HIGH_TEMP_AGING_TEST version\n");
+#endif
 
 	if ((step_chg_jeita->jeita_fcc_cfg.valid != step_chg_jeita->jeita_fv_cfg.valid)
 		|| (jeita_thresh_valid != step_chg_jeita->jeita_fcc_cfg.valid)) {
@@ -1316,6 +1338,7 @@ static int parse_step_chg_jeita_params(struct qti_qbg *chip, struct device_node 
 			step_chg_jeita->step_fcc_cfg.data[i].low_threshold,
 			step_chg_jeita->step_fcc_cfg.data[i].high_threshold,
 			step_chg_jeita->step_fcc_cfg.data[i].value);
+			step_fcc_chg_value_temp[i] = step_chg_jeita->step_fcc_cfg.data[i].value ;
 	}
 
 	pr_debug("jeita-fcc-ranges:\n");
@@ -1358,10 +1381,11 @@ static int qbg_load_battery_profile(struct qti_qbg *chip)
 	profile_node = of_batterydata_get_best_profile(chip->batt_node,
 			chip->batt_id_ohm / 1000, NULL);
 	if (IS_ERR_OR_NULL(profile_node)) {
-		rc = profile_node ? PTR_ERR(profile_node) : -EINVAL;
-		pr_err("Failed to detect valid QBG battery profile, rc=%d\n",
-			rc);
-		goto out;
+
+		pr_err("BattID %d mismatch\n",chip->batt_id_ohm);
+		chip->batt_id_ohm = 61000;
+		profile_node = of_batterydata_get_best_profile(chip->batt_node,
+			chip->batt_id_ohm / 1000, NULL);
 	}
 
 	chip->battery = devm_kzalloc(chip->dev, sizeof(*chip->battery), GFP_KERNEL);
@@ -1426,14 +1450,44 @@ static int qbg_load_battery_profile(struct qti_qbg *chip)
 		chip->recharge_soc = 100 - temp[0];
 
 	chip->recharge_vflt_delta_mv = QBG_DEFAULT_RECHARGE_VFLT_DELTA;
-	rc = of_property_read_u32(profile_node, "qcom,recharge-vflt-delta", &temp[0]);
+	rc = of_property_read_u32_array(profile_node, "qcom,recharge-vflt-delta",
+		chip->rechg_vflt_delta, OPLUS_RECHG_VFLT_NUM);
 	if (!rc)
-		chip->recharge_vflt_delta_mv = temp[0];
+		chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0];
 
-	qbg_dbg(chip, QBG_DEBUG_SDAM, "Recharge SOC=% Recharge-Vflt=%duV Recharge-Ibat=%dmA\n",
+	qbg_dbg(chip, QBG_DEBUG_SDAM, "Recharge SOC=%d Recharge-Vflt=%duV Recharge-Ibat=%dmA\n",
 		chip->recharge_soc, chip->recharge_vflt_delta_mv, chip->recharge_iterm_ma);
 
 	rc = parse_step_chg_jeita_params(chip, profile_node);
+
+	rc = of_property_read_u32_array(profile_node, "qcom,batt-temp-coeffs",
+							chip->batt_temp_coeffs, OPLUS_BATT_TEMP_NUM);
+	if (rc) {
+		pr_err("Failed to read batt-temp-coeffs, rc=%d\n", rc);
+		goto out;
+	}
+	rc = of_property_read_u32_array(profile_node, "qcom,chg-limit-current-default",
+							chip->chg_i_lcdon, OPLUS_CHG_I_LCDON_NUM);
+	if (rc) {
+		pr_err("Failed to read chg-limit-current, rc=%d\n", rc);
+		goto out;
+	}
+	rc = of_property_read_u32_array(profile_node, "qcom,batt-current-coeffs",
+							chip->batt_current_coeffs, OPLUS_BATT_CURR_NUM);
+	if (rc) {
+		pr_err("Failed to read batt-current-coeffs, rc=%d\n", rc);
+		goto out;
+	}
+	rc = of_property_read_u32_array(profile_node, "qcom,batt-max-mv-coeffs",
+							chip->batt_max_mv_coeffs, OPLUS_BATT_MAX_MV_NUM);
+	if (rc) {
+		pr_err("Failed to read batt-max-mv-coeffs, rc=%d\n", rc);
+		goto out;
+	}
+#if defined(HIGH_TEMP_AGING_TEST)
+	chip->batt_max_mv_coeffs[0] = OPLUS_HIGH_TEMP_AGING_TEST_MAX_VOL;
+#endif
+
 out:
 	of_node_put(chip->batt_node);
 	return rc;
@@ -1642,10 +1696,9 @@ static int qbg_setup_battery(struct qti_qbg *chip)
 		}
 	}
 
-	qbg_dbg(chip, QBG_DEBUG_PROFILE, "battery_missing=%s batt_id=%d Ohm profile_loaded=%d battery_type=%s\n",
+	pr_info("battery_missing=%s sbatt_id=%d Ohm profile_loaded=%d battery_type=%s\n",
 		chip->battery_missing ? "true" : "false", chip->batt_id_ohm,
 		chip->profile_loaded, chip->batt_type_str);
-
 	return rc;
 }
 
@@ -1670,10 +1723,14 @@ static int qbg_get_pon_reading(struct qti_qbg *chip, unsigned int *ocv,
 		*ocv = VBAT_0PCT_OCV;
 
 	*ibat = ibat_data * IBATT_10A_LSB * ICHG_FS_10A;
-	qbg_dbg(chip, QBG_DEBUG_PON, "ocv:%u ibat:%u\n", ocv, ibat);
+
+	qbg_dbg(chip, QBG_DEBUG_PON, "ocv:%u ibat:%u\n", *ocv, *ibat);
 
 	return 0;
 }
+
+#define DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF	10
+#define DEFAULT_IGNORE_SHUTDOWN_SOC_SECS	600
 
 static int qbg_determine_pon_soc(struct qti_qbg *chip)
 {
@@ -1682,6 +1739,7 @@ static int qbg_determine_pon_soc(struct qti_qbg *chip)
 	unsigned long time_diff = 0;
 	unsigned int pon_ocv;
 	time64_t rtc_sec;
+	unsigned int temp_diff = 0;
 
 	/* Get RTC time here */
 	rc = get_rtc_time(chip, &rtc_sec);
@@ -1735,9 +1793,303 @@ static int qbg_determine_pon_soc(struct qti_qbg *chip)
 	qbg_dbg(chip, QBG_DEBUG_PON, "Shutdown: SOC=%d OCV=%duV Ibat:%duA timediff=%lusecs, time_now=%lusecs\n",
 			chip->pon_soc, chip->pon_ocv, chip->pon_ibat, time_diff, rtc_sec);
 
+	time_diff = rtc_sec - (chip->essential_params).rtc_time;
+	temp_diff = abs(chip->pon_tbat - (chip->essential_params).batt_therm *10)/10;
+
+	if((temp_diff < DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF) && (time_diff < DEFAULT_IGNORE_SHUTDOWN_SOC_SECS)
+		&& ((chip->essential_params).rtc_time > 0) && ((chip->essential_params).full_soc > 0)) {
+		chip->soc = ((chip->essential_params).msoc *100)/((chip->essential_params).full_soc);
+		pr_info("use shutdown: %d to %d",chip->pon_soc,chip->soc);
+	}
 	return 0;
 }
 
+extern bool isSellMode(void);
+void oplus_recharge_based_voltage(struct qti_qbg *chip) {
+	int rc = 0;
+	union power_supply_propval prop = {0, };
+
+	rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_STATUS, &prop);
+	if ((rc >=0 ) && (prop.intval == POWER_SUPPLY_STATUS_FULL)) {
+		power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
+		if(chip->float_volt_uv - prop.intval >= (chip->recharge_vflt_delta_mv) *1000)
+		{
+			pr_err("aim vol %d, now %d, voltage recharging\n", chip->float_volt_uv, prop.intval);
+			oplus_trigger_recharge();
+		}
+	}
+}
+
+static int get_step_chg_level(int vol) {
+	int i = 0;
+
+	for (i = 0; i < (step_chg_jeita->step_fcc_cfg.range_count); i++) {
+		if (vol <= (step_chg_jeita->step_fcc_cfg.data[i].high_threshold)){
+			//pr_err("vol is %d, fcc is %d",vol, step_chg_jeita->step_fcc_cfg.data[i].value);
+			return step_chg_jeita->step_fcc_cfg.data[i].value;
+		}
+	}
+	return step_chg_jeita->step_fcc_cfg.data[0].value;
+}
+
+static int get_vol_level(int vol) {
+	int i = 0;
+
+	for (i = 0; i < (step_chg_jeita->step_fcc_cfg.range_count); i++) {
+		if (vol <= (step_chg_jeita->step_fcc_cfg.data[i].high_threshold)){
+			return i;
+		}
+	}
+	return (step_chg_jeita->step_fcc_cfg.range_count -1);
+}
+
+static void status_change_work(struct work_struct *work)
+{
+	struct qti_qbg *chip = container_of(work, struct qti_qbg,
+						status_change_work);
+	union power_supply_propval prop = {0, };
+	int rc, val, charger_present = 0;
+	union power_supply_propval prop_i = {0, };
+	int step_chg_level, batt_temp = 0;
+	int vol_level = 0;
+
+	if (!is_batt_available(chip))
+		return;
+
+	if (!is_usb_available(chip))
+		return;
+
+	rc = power_supply_get_property(chip->batt_psy,
+			POWER_SUPPLY_PROP_CHARGE_TYPE, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charge-type, rc=%d\n", rc);
+	else
+		chip->charge_type = prop.intval;
+
+	rc = power_supply_get_property(chip->batt_psy,
+			POWER_SUPPLY_PROP_STATUS, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charger status, rc=%d\n", rc);
+	else
+		chip->charge_status = prop.intval;
+
+	rc = qbg_read_iio_chan(chip, CHARGE_DONE, &val);
+	if (rc < 0)
+		pr_err("Failed to get charge done status, rc=%d\n", rc);
+	else
+		chip->charge_done = val;
+
+	rc = power_supply_get_property(chip->usb_psy,
+			POWER_SUPPLY_PROP_PRESENT, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charger present, rc=%d\n", rc);
+	else
+		charger_present = prop.intval;
+
+	qbg_dbg(chip, QBG_DEBUG_STATUS, "charge_status=%d charge_done=%d charger_present:%d\n",
+			chip->charge_status, chip->charge_done, chip->charger_present);
+
+	/*
+	 * Set FCC and iterm back to default value on charger removal
+	 * as they could have been updated during recharge.
+	 */
+	if (chip->charger_present && !charger_present) {
+		qbg_notify_charger(chip);
+		chip->in_recharge = false;
+	}
+	chip->charger_present = charger_present;
+	if (chip->charge_status != POWER_SUPPLY_STATUS_DISCHARGING)
+	{
+		if (charger_log_enable) {
+			qbg_debug_mask = 0xFF;
+			rc = power_supply_get_property(chip->usb_psy,
+					  POWER_SUPPLY_PROP_CURRENT_NOW, &prop);
+			pr_info("usb current:%d\n", prop.intval);
+		}
+		rc = power_supply_get_property(chip->batt_psy,
+					POWER_SUPPLY_PROP_TEMP, &prop);
+		if (rc < 0) {
+			pr_err("Failed to get qbg temp, rc=%d\n", rc);
+			goto out;
+		}
+		batt_temp = prop.intval;
+
+		if ((batt_temp < OPLUS_LOWEST_TEMP) || (batt_temp >= chip->batt_temp_coeffs[8]) \
+				|| is_debug_batt_id(chip))
+		{
+			if (charger_log_enable)
+				pr_info("batt_temp %d,discharge\n", batt_temp);//-8) [53
+
+			power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_CHARGE_NOW, &prop);
+			if (prop.intval == 1)
+			{
+				prop.intval = 0;
+				power_supply_set_property(chip->batt_psy, POWER_SUPPLY_PROP_CHARGE_NOW, &prop);
+				factoraging_control = 1;
+			}
+
+			prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[0];
+			power_supply_set_property(chip->batt_psy, POWER_SUPPLY_PROP_VOLTAGE_MAX, &prop);
+		} else {
+			power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_CHARGE_NOW, &prop);
+			if ((factoraging_control == 1) && (prop.intval == 0))
+			{
+				prop.intval = 1;
+				power_supply_set_property(chip->batt_psy, POWER_SUPPLY_PROP_CHARGE_NOW, &prop);
+			}
+			power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
+			step_chg_level = get_step_chg_level(prop.intval);
+			/*Get battery voltage level to configure different charging currents*/
+			vol_level = get_vol_level(prop.intval);
+
+			chg_limit_lcdon_i = chip->chg_i_lcdon[1];
+			chip->step_chg_jeita_params->step_fcc_cfg.data[0].value= step_fcc_chg_value_temp[0];
+			chip->step_chg_jeita_params->step_fcc_cfg.data[1].value= step_fcc_chg_value_temp[1];
+			chip->step_chg_jeita_params->step_fcc_cfg.data[2].value= step_fcc_chg_value_temp[2];
+			chip->step_chg_jeita_params->step_fcc_cfg.data[3].value= step_fcc_chg_value_temp[3];
+
+			high_temp = 0;
+			if (batt_temp >= OPLUS_LOWEST_TEMP && batt_temp < chip->batt_temp_coeffs[1])
+			{//[-8 2)
+				chg_limit_lcdon_i = chip->chg_i_lcdon[0];
+				if (vol_level == 0) { /*vol (3.22V, 4.18V] 150mA*/
+					prop_i.intval = chip->batt_current_coeffs[1];
+				}
+				else { /*vol (4.18V, 4.51V] 50mA*/
+					prop_i.intval = chip->batt_current_coeffs[2];
+				}
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[1]; /*4510mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[2]; /*300mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[-8 2),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[1] && batt_temp < chip->batt_temp_coeffs[2])
+			{//[2 7)
+				if (vol_level == 0) { /*vol (3.22V, 4.18V] 275mA*/
+					prop_i.intval = chip->batt_current_coeffs[3];
+				}
+				else { /*vol (4.18V, 4.51V] 75mA*/
+					prop_i.intval = chip->batt_current_coeffs[4];
+				}
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[2]; /*4510mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[1]; /*200mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[2 7),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[2] && batt_temp < chip->batt_temp_coeffs[3])
+			{//[7 17)
+				if (vol_level == 0) { /*vol (3.22V, 4.18V] 475mA*/
+					prop_i.intval = chip->batt_current_coeffs[5];
+				}
+				else if ((vol_level == 1) || (vol_level == 2)) { /*vol (4.18V, 4.43V] 275mA*/
+					prop_i.intval = chip->batt_current_coeffs[6];
+				}
+				else { /*vol (4.43V, 4.51V] 150mA*/
+					prop_i.intval = chip->batt_current_coeffs[7];
+				}
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[3]; /*4510mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[7 17),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[3] && batt_temp < chip->batt_temp_coeffs[4])
+			{//[17 27)
+				if (vol_level == 0) { /*vol (3.22V, 4.18V] 1225mA*/
+					prop_i.intval = chip->batt_current_coeffs[8];
+				}
+				else if (vol_level == 1) { /*vol (4.18V, 4.33V] 900mA*/
+					prop_i.intval = chip->batt_current_coeffs[9];
+				}
+				else if (vol_level == 2) { /*vol (4.33V, 4.43V] 725mA*/
+					prop_i.intval = chip->batt_current_coeffs[10];
+				}
+				else { /*vol (4.43V, 4.51V] 600mA*/
+					prop_i.intval = chip->batt_current_coeffs[11];
+				}
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[4]; /*4510mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+				if (charger_log_enable)
+					pr_info("t %d,[17 27),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[4] && batt_temp < chip->batt_temp_coeffs[5])
+			{//[27 40.7)
+				/*
+				 * vol (3.22V, 4.18V] 1300mA
+				 * vol (4.18V, 4.33V] 1150mA
+				 * vol (4.33V, 4.43V] 900mA
+				 * vol (4.43V, 4.51V] 725mA
+				 */
+				prop_i.intval = step_chg_level;
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[5]; /*4500mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[27 40.7),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[5] && batt_temp < chip->batt_temp_coeffs[6])
+			{//[40.7 42.3)
+				if (vol_level == 0) { /*vol (3.22V, 4.18V] 1025mA*/
+					prop_i.intval = chip->batt_current_coeffs[12];
+				}
+				else if (vol_level == 1) { /*vol (4.18V, 4.33V] 925mA*/
+					prop_i.intval = chip->batt_current_coeffs[13];
+				}
+				else if (vol_level == 2) { /*vol (4.33V, 4.43V] 850mA*/
+					prop_i.intval = chip->batt_current_coeffs[14];
+				}
+				else { /*vol (4.43V, 4.51V] 650mA*/
+					prop_i.intval = chip->batt_current_coeffs[15];
+				}
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[6]; /*4500mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[40.7 42.3),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[6] && batt_temp < chip->batt_temp_coeffs[7])
+			{//[42.3 43)
+				prop_i.intval = chip->batt_current_coeffs[16]; /*vol (3.22V, 4.50V] 300mA*/
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[7]; /*4500mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[42.3 43),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+			else if (batt_temp >= chip->batt_temp_coeffs[7] && batt_temp < chip->batt_temp_coeffs[8])
+			{//[43 53)
+				high_temp = 1;
+				prop_i.intval = chip->batt_current_coeffs[17]; /*vol (3.22V, 4.15V] 400mA*/
+				prop.intval = chip->float_volt_uv = chip->batt_max_mv_coeffs[8]; /*4150mV*/
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[0]; /*100mA*/
+
+				if (charger_log_enable)
+					pr_info("t %d,[43 53),i %d,v %d\n", batt_temp,prop_i.intval,prop.intval);
+			}
+
+			if (step_chg_level < (prop_i.intval))//vote min for fcc
+				(prop_i.intval) = step_chg_level;
+
+			power_supply_set_property(chip->batt_psy, POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &prop_i);
+			power_supply_set_property(chip->batt_psy, POWER_SUPPLY_PROP_VOLTAGE_MAX, &prop);
+
+			if (isSellMode()) {
+				chip->recharge_vflt_delta_mv = chip->rechg_vflt_delta[2]; /*300mA*/
+				chip->float_volt_uv = 4050000;	// macro OPLUS_SELL_MAX_VOL
+			}
+
+			oplus_recharge_based_voltage(chip);
+		}
+	}
+out:
+	rc = qbg_charge_full_update(chip);
+	if (rc < 0) {
+		pr_err("Failed in charge full update, rc=%d\n", rc);
+		return;
+	}
+}
 static int qbg_psy_get_prop(struct power_supply *psy,
 			enum power_supply_property psp,
 			union power_supply_propval *pval)
@@ -2006,6 +2358,29 @@ static int qbg_get_sample_time_us(struct qti_qbg *chip)
 	return rc;
 }
 
+static ssize_t real_battid_store(struct class *c, struct class_attribute *attr,
+						const char *buf, size_t count)
+{
+	struct qti_qbg *chip = container_of(c, struct qti_qbg, qbg_class);
+	int val;
+
+	if (kstrtoint(buf, 0, &val))
+		return -EINVAL;
+
+	val = chip->batt_id_ohm;
+
+	return count;
+}
+
+static ssize_t real_battid_show(struct class *c, struct class_attribute *attr,
+						char *buf)
+{
+	struct qti_qbg *chip = container_of(c, struct qti_qbg, qbg_class);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", chip->batt_id_ohm);
+}
+static CLASS_ATTR_RW(real_battid);
+
 static ssize_t qbg_context_show(struct class *c,
 				struct class_attribute *attr, char *buf)
 {
@@ -2064,6 +2439,7 @@ static CLASS_ATTR_RW(qbg_context);
 
 static struct attribute *qbg_class_attrs[] = {
 	&class_attr_qbg_context.attr,
+	&class_attr_real_battid.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(qbg_class);
@@ -2290,6 +2666,8 @@ static long qbg_device_ioctl(struct file *file, unsigned int cmd,
 			return -EFAULT;
 		}
 
+		pr_err("prev ocv: %d 10nV", ( (unsigned int) (chip->essential_params.ocv) )<< 16);
+
 		if (copy_to_user(params_user, (void *)&chip->essential_params,
 				sizeof(chip->essential_params))) {
 			pr_err("Failed to copy QBG essential params to user\n");
@@ -2417,6 +2795,18 @@ static int qbg_register_interrupts(struct qti_qbg *chip)
 	if (chip->battery_unknown || is_debug_batt_id(chip))
 		return rc;
 
+	/*
+	 * Turn off data full interrupt from PMIC side. After IRQ handler
+	 * registration, we re-enable the interrupt which guarantees the IRQ
+	 * handler will fire if the FIFO is already full.
+	 */
+	rc = qbg_enable_data_full_int(chip, false);
+	if (rc < 0) {
+		dev_err(chip->dev,
+			"Failed to disable interrupt from PMIC side, rc=%d\n",
+			rc);
+	}
+
 	rc = devm_request_threaded_irq(chip->dev, chip->irq, NULL,
 			qbg_data_full_irq_handler, IRQF_ONESHOT,
 			"qbg-sdam", chip);
@@ -2424,6 +2814,14 @@ static int qbg_register_interrupts(struct qti_qbg *chip)
 		dev_err(chip->dev, "Failed to request IRQ(qbg-sdam), rc=%d\n",
 			rc);
 		return rc;
+	}
+
+	/* Enable the interrupt, it will get raised if FIFO is already full */
+	rc = qbg_enable_data_full_int(chip, true);
+	if (rc < 0) {
+		dev_err(chip->dev,
+			"Failed to enable interrupt from PMIC side, rc=%d\n",
+			rc);
 	}
 
 	rc = enable_irq_wake(chip->irq);
@@ -2645,6 +3043,10 @@ static int qbg_parse_dt(struct qti_qbg *chip)
 	rc = of_property_read_u32(node, "qcom,vbat-cutoff-mv", &val);
 	if (!rc)
 		chip->vbat_cutoff_mv = val;
+	if (isStarRiverWatch()) {
+		chip->vbat_cutoff_mv = get_cutoffvol_by_ddcount();
+	}
+	g_vbat_cutoff_uv = chip->vbat_cutoff_mv * 1000;
 
 	chip->ibat_cutoff_ma = QBG_DEFAULT_IBAT_CUTOFF_MA;
 	rc = of_property_read_u32(node, "qcom,ibat-cutoff-ma", &val);
@@ -2669,9 +3071,10 @@ static int qbg_parse_dt(struct qti_qbg *chip)
 	chip->vbatt_empty_threshold_mv = 0;
 	rc = of_property_read_u32(node, "qcom,vbatt-empty-threshold-mv",
 					&val);
-
 	if (!rc)
 		chip->vbatt_empty_threshold_mv = val;
+	/*qcom,vbatt-empty-threshold-mv <= qcom,vbat-cutoff-mv -100mV .*/
+	chip->vbatt_empty_threshold_mv = chip->vbat_cutoff_mv - VBAT_CUTOFF_TO_EMPTY_GAP_MV;
 
 	chip->vbatt_empty_irq = of_irq_get_byname(node, "qbg-vbatt-empty");
 	if (chip->vbatt_empty_irq < 0) {
@@ -2871,6 +3274,9 @@ static int qti_qbg_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to register QBG interrupts, rc=%d\n", rc);
 		return rc;
 	}
+
+	qbg_chip = chip;
+	oplus_get_rtc_time = qbg_get_rtc_time;
 
 	schedule_delayed_work(&chip->soc_update_work, msecs_to_jiffies(SOC_UPDATE_FREQUENCY_MS));
 

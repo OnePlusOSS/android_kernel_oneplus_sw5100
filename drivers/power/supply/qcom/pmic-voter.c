@@ -20,6 +20,9 @@
 static DEFINE_SPINLOCK(votable_list_slock);
 static LIST_HEAD(votable_list);
 
+extern bool charger_log_enable;
+extern int aging_chg_ctl;
+
 static struct dentry *debug_root;
 
 struct client_vote {
@@ -421,6 +424,10 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 	if (!votable || !client_str)
 		return -EINVAL;
 
+	if (aging_chg_ctl && (strcmp(votable->name, "CHG_DISABLE") == 0) && (!enabled)) {
+		pr_info("aging_chg_ctl %d, enablechg %d",aging_chg_ctl, (!enabled));
+		return rc;
+	}
 	lock_votable(votable);
 
 	client_id = get_client_id(votable, client_str);
@@ -457,9 +464,9 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 		goto out;
 	}
 
-	pr_debug("%s: %s,%d voting %s of val=%d\n",
-		votable->name,
-		client_str, client_id, enabled ? "on" : "off", val);
+	if(charger_log_enable)
+		pr_info("%s: %s,%d voting %s of val=%d\n", votable->name,
+			client_str, client_id, enabled ? "on" : "off", val);
 	switch (votable->type) {
 	case VOTE_MIN:
 		vote_min(votable, client_id, &effective_result, &effective_id);
@@ -483,6 +490,10 @@ int vote(struct votable *votable, const char *client_str, bool enabled, int val)
 			|| (effective_result != votable->effective_result)) {
 		votable->effective_client_id = effective_id;
 		votable->effective_result = effective_result;
+		if(charger_log_enable)
+			pr_info("%s: is %d voted by %s\n",
+				votable->name, effective_result,
+				get_client_str(votable, effective_id));
 		pr_debug("%s: effective voting is now %d voted by %s,%d\n",
 			votable->name, effective_result,
 			get_client_str(votable, effective_id),
@@ -610,7 +621,7 @@ static int force_active_get(void *data, u64 *val)
 	return 0;
 }
 
-static int force_active_set(void *data, u64 val)
+int force_active_set(void *data, u64 val)
 {
 	struct votable *votable = data;
 	int rc = 0;

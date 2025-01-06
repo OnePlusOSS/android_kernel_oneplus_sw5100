@@ -585,7 +585,13 @@ int qbg_lookup_soc_ocv(struct qbg_battery_data *battery, int *pon_soc, int ocv, 
 	*pon_soc = -EINVAL;
 
 	lut = charging ? &battery->table0[0] : &battery->table0[1];
-	for (i = 0; i < lut->ocv_length; i++) {
+
+	if (ocv < lut->ocv[0]) {
+		*pon_soc = lut->soc[0];
+		return 0;
+	}
+
+	for (i = 0; i < lut->ocv_length - 1; i++) {
 		if (ocv == lut->ocv[i]) {
 			*pon_soc = lut->soc[i];
 			break;

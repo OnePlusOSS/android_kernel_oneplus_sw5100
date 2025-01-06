@@ -61,3 +61,13 @@ blocklist vsock
 blocklist vsock_diag
 blocklist xc4000
 blocklist xc5000
+blocklist haptic
+blocklist bcmdhd
+blocklist eud
+blocklist i2c-dev
+blocklist i2c-gpio
+blocklist rcutorture
+blocklist torture
+blocklist locktorture
+blocklist bes2610
+

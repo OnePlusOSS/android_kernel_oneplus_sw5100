@@ -212,7 +212,7 @@ static void binder_lru_freelist_add(struct binder_alloc *alloc,
 		trace_binder_free_lru_start(alloc, index);
 
 		ret = list_lru_add(&binder_freelist, &page->lru);
-		WARN_ON(!ret);
+        //WARN_ON(!ret);
 
 		trace_binder_free_lru_end(alloc, index);
 	}

@@ -113,6 +113,8 @@ struct pl_data {
 	struct iio_channel	**iio_chan_list_smb_parallel;
 };
 
+struct votable *g_usb_icl_votable = NULL;
+
 static struct pl_data *the_chip;
 
 enum print_reason {
@@ -2060,6 +2062,35 @@ static void qcom_batt_create_debugfs(struct pl_data *chip)
 			&debug_mask);
 }
 
+void oplus_trigger_recharge(void)
+{
+	struct pl_data *chip;
+	int rc = 0, val = 1;
+
+	if(the_chip) {
+		chip = the_chip;
+		rc = chip->chg_param->iio_write(chip->dev, PSY_IIO_FORCE_RECHARGE, val);
+		if (rc < 0) {
+			pr_err("Failed to trigger_recharge rc=%d\n", rc);
+		}
+	}
+}
+EXPORT_SYMBOL(oplus_trigger_recharge);
+
+int oplus_enter_shipmode(void)
+{
+	struct pl_data *chip;
+	int rc = 0, val = 1;
+
+	chip = the_chip;
+	rc = chip->chg_param->iio_write(chip->dev, PSY_IIO_SET_SHIP_MODE, val);
+	if (rc < 0) {
+		pr_err("Failed to set shipmode rc=%d\n", rc);
+	}
+	return rc;
+}
+EXPORT_SYMBOL(oplus_enter_shipmode);
+
 #define DEFAULT_RESTRICTED_CURRENT_UA	1000000
 int qcom_batt_init(struct device *dev, struct charger_param *chg_param)
 {
@@ -2198,6 +2229,8 @@ int qcom_batt_init(struct device *dev, struct charger_param *chg_param)
 
 	the_chip = chip;
 
+	g_usb_icl_votable = chip->usb_icl_votable;
+
 	return 0;
 
 unreg_notifier:
@@ -2238,5 +2271,6 @@ void qcom_batt_deinit(void)
 	destroy_votable(chip->fcc_main_votable);
 	wakeup_source_unregister(chip->pl_ws);
 	the_chip = NULL;
+	g_usb_icl_votable = NULL;
 	kfree(chip);
 }

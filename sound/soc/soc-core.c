@@ -1021,6 +1021,8 @@ int snd_soc_add_pcm_runtime(struct snd_soc_card *card,
 				 cpu->dai_name);
 			goto _err_defer;
 		}
+
+        dev_info(card->dev, "ASoC: CPU DAI %s  registered dai_link %s\n", cpu->dai_name, dai_link->name);
 		snd_soc_rtd_add_component(rtd, asoc_rtd_to_cpu(rtd, i)->component);
 	}
 
@@ -1033,6 +1035,7 @@ int snd_soc_add_pcm_runtime(struct snd_soc_card *card,
 			goto _err_defer;
 		}
 
+        dev_info(card->dev, "ASoC: Codec DAI %s  registered dai_link %s\n", codec->dai_name, dai_link->name);
 		snd_soc_rtd_add_component(rtd, asoc_rtd_to_codec(rtd, i)->component);
 	}
 
