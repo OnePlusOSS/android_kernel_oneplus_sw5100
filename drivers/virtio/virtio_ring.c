@@ -12,9 +12,6 @@
 #include <linux/hrtimer.h>
 #include <linux/dma-mapping.h>
 #include <linux/spinlock.h>
-#ifdef CONFIG_GH_VIRTIO_DEBUG
-#include <trace/events/gh_virtio_frontend.h>
-#endif
 #include <xen/xen.h>
 
 #ifdef DEBUG
@@ -628,11 +625,6 @@ static inline int virtqueue_add_split(struct virtqueue *_vq,
 
 	pr_debug("Added buffer head %i to %p\n", head, vq);
 	END_USE(vq);
-#ifdef CONFIG_GH_VIRTIO_DEBUG
-	trace_virtio_vring_split_add(_vq->vdev->index, head,
-			vq->split.avail_idx_shadow-1, descs_used, vq->vq.num_free);
-#endif
-
 
 	/* This is very unlikely, but theoretically possible.  Kick
 	 * just in case. */
@@ -722,10 +714,6 @@ static void detach_buf_split(struct vring_virtqueue *vq, unsigned int head,
 	/* Plus final descriptor */
 	vq->vq.num_free++;
 
-#ifdef CONFIG_GH_VIRTIO_DEBUG
-	trace_virtio_detach_buf(vq->vq.vdev->index, vq->free_head, vq->vq.num_free);
-#endif
-
 	if (vq->indirect) {
 		struct vring_desc *indir_desc =
 				vq->split.desc_state[head].indir_desc;
@@ -772,11 +760,6 @@ static void *virtqueue_get_buf_ctx_split(struct virtqueue *_vq,
 		END_USE(vq);
 		return NULL;
 	}
-
-#ifdef CONFIG_GH_VIRTIO_DEBUG
-	trace_virtio_get_buf_ctx_split(_vq->vdev->index, vq->last_used_idx,
-			virtio16_to_cpu(vq->vq.vdev, vq->split.vring.used->idx));
-#endif
 
 	if (!more_used_split(vq)) {
 		pr_debug("No more buffers in queue\n");
@@ -826,6 +809,14 @@ static void virtqueue_disable_cb_split(struct virtqueue *_vq)
 
 	if (!(vq->split.avail_flags_shadow & VRING_AVAIL_F_NO_INTERRUPT)) {
 		vq->split.avail_flags_shadow |= VRING_AVAIL_F_NO_INTERRUPT;
+
+		/*
+		 * If device triggered an event already it won't trigger one again:
+		 * no need to disable.
+		 */
+		if (vq->event_triggered)
+			return;
+
 		if (vq->event)
 			/* TODO: this is a hack. Figure out a cleaner value to write. */
 			vring_used_event(&vq->split.vring) = 0x0;
@@ -1280,7 +1271,7 @@ static inline int virtqueue_add_packed(struct virtqueue *_vq,
 		}
 	}
 
-	if (i < head)
+	if (i <= head)
 		vq->packed.avail_wrap_counter ^= 1;
 
 	/* We're using some buffers from the free list. */
@@ -1517,6 +1508,14 @@ static void virtqueue_disable_cb_packed(struct virtqueue *_vq)
 
 	if (vq->packed.event_flags_shadow != VRING_PACKED_EVENT_FLAG_DISABLE) {
 		vq->packed.event_flags_shadow = VRING_PACKED_EVENT_FLAG_DISABLE;
+
+		/*
+		 * If device triggered an event already it won't trigger one again:
+		 * no need to disable.
+		 */
+		if (vq->event_triggered)
+			return;
+
 		vq->packed.vring.driver->flags =
 			cpu_to_le16(vq->packed.event_flags_shadow);
 	}
@@ -2036,12 +2035,6 @@ void virtqueue_disable_cb(struct virtqueue *_vq)
 {
 	struct vring_virtqueue *vq = to_vvq(_vq);
 
-	/* If device triggered an event already it won't trigger one again:
-	 * no need to disable.
-	 */
-	if (vq->event_triggered)
-		return;
-
 	if (vq->packed_ring)
 		virtqueue_disable_cb_packed(_vq);
 	else
@@ -2478,5 +2471,15 @@ const struct vring *virtqueue_get_vring(struct virtqueue *vq)
 	return &to_vvq(vq)->split.vring;
 }
 EXPORT_SYMBOL_GPL(virtqueue_get_vring);
+
+/*
+ * Prevents use of DMA API for buffers passed via the specified virtqueue.
+ * DMA API may still be used for the vrings themselves.
+ */
+void virtqueue_disable_dma_api_for_buffers(struct virtqueue *vq)
+{
+	to_vvq(vq)->use_dma_api = false;
+}
+EXPORT_SYMBOL_GPL(virtqueue_disable_dma_api_for_buffers);
 
 MODULE_LICENSE("GPL");

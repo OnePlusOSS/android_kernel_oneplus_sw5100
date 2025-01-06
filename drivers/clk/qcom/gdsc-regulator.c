@@ -59,7 +59,7 @@
 #define CFG_GDSCR_OFFSET	(REG_OFFSET + 0x4)
 
 /* Timeout Delay */
-#define TIMEOUT_US		500
+#define TIMEOUT_US		1500
 
 #define MBOX_TOUT_MS		500
 
@@ -187,13 +187,13 @@ static int gdsc_init_is_enabled(struct gdsc *sc)
 		return 0;
 	}
 
+	regmap = sc->regmap;
+	mask = SW_COLLAPSE_MASK;
+
 	if (sc->collapse_count) {
 		for (i = 0; i < sc->collapse_count; i++)
 			regmap = sc->collapse_vote.regmap[i];
 		mask = BIT(sc->collapse_vote.vote_bit);
-	} else {
-		regmap = sc->regmap;
-		mask = SW_COLLAPSE_MASK;
 	}
 
 	ret = regmap_read(regmap, REG_OFFSET, &regval);
@@ -737,7 +737,7 @@ void gdsc_debug_print_regs(struct regulator *regulator)
 	pr_info("GDSCR: 0x%.8x CFG: 0x%.8x CFG2: 0x%.8x\n",
 		regvals[0], regvals[1], regvals[2]);
 }
-EXPORT_SYMBOL(gdsc_debug_print_regs);
+EXPORT_SYMBOL_GPL(gdsc_debug_print_regs);
 
 static int gdsc_parse_dt_data(struct gdsc *sc, struct device *dev,
 				struct regulator_init_data **init_data)

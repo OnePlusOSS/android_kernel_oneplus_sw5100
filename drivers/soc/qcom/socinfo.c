@@ -826,7 +826,7 @@ socinfo_get_cluster_info(enum subset_cluster_type cluster)
 
 	return sub_cluster;
 }
-EXPORT_SYMBOL(socinfo_get_cluster_info);
+EXPORT_SYMBOL_GPL(socinfo_get_cluster_info);
 
 static ssize_t
 msm_get_subset_cores(struct device *dev,
@@ -900,7 +900,7 @@ socinfo_get_part_info(enum subset_part_type part)
 
 	return (partinfo & BIT(part));
 }
-EXPORT_SYMBOL(socinfo_get_part_info);
+EXPORT_SYMBOL_GPL(socinfo_get_part_info);
 
 static ssize_t
 msm_get_subset_parts(struct device *dev,
@@ -935,7 +935,7 @@ socinfo_get_part_count(enum subset_part_type part)
 
 	return part_count;
 }
-EXPORT_SYMBOL(socinfo_get_part_count);
+EXPORT_SYMBOL_GPL(socinfo_get_part_count);
 
 /**
  * socinfo_get_subpart_info - Get subpart information
@@ -984,7 +984,7 @@ socinfo_get_subpart_info(enum subset_part_type part,
 
 	return 0;
 }
-EXPORT_SYMBOL(socinfo_get_subpart_info);
+EXPORT_SYMBOL_GPL(socinfo_get_subpart_info);
 
 CREATE_PART_FUNCTION(gpu, PART_GPU);
 CREATE_PART_FUNCTION(video, PART_VIDEO);
@@ -1182,6 +1182,7 @@ static const struct soc_id soc_id[] = {
 	{ 341, "SDA845" },
 	{ 345, "SDM636" },
 	{ 346, "SDA636" },
+	{ 347, "QCS605" },
 	{ 349, "SDM632" },
 	{ 350, "SDA632" },
 	{ 351, "SDA450" },
@@ -1951,7 +1952,7 @@ uint32_t socinfo_get_id(void)
 {
 	return (socinfo) ? le32_to_cpu(socinfo->id) : 0;
 }
-EXPORT_SYMBOL(socinfo_get_id);
+EXPORT_SYMBOL_GPL(socinfo_get_id);
 
 const char *socinfo_get_id_string(void)
 {
@@ -1959,13 +1960,13 @@ const char *socinfo_get_id_string(void)
 
 	return socinfo_machine(NULL, id);
 }
-EXPORT_SYMBOL(socinfo_get_id_string);
+EXPORT_SYMBOL_GPL(socinfo_get_id_string);
 
 uint32_t socinfo_get_serial_number(void)
 {
 	return (socinfo) ? le32_to_cpu(socinfo->serial_num) : 0;
 }
-EXPORT_SYMBOL(socinfo_get_serial_number);
+EXPORT_SYMBOL_GPL(socinfo_get_serial_number);
 
 int socinfo_get_feature_code(void)
 {
@@ -1976,7 +1977,7 @@ int socinfo_get_feature_code(void)
 
 	return socinfo_get_feature_code_id();
 }
-EXPORT_SYMBOL(socinfo_get_feature_code);
+EXPORT_SYMBOL_GPL(socinfo_get_feature_code);
 
 int socinfo_get_pcode(void)
 {
@@ -1987,7 +1988,7 @@ int socinfo_get_pcode(void)
 
 	return socinfo_get_pcode_id();
 }
-EXPORT_SYMBOL(socinfo_get_pcode);
+EXPORT_SYMBOL_GPL(socinfo_get_pcode);
 
 char *socinfo_get_partinfo_part_name(unsigned int part_id)
 {
@@ -2003,7 +2004,7 @@ char *socinfo_get_partinfo_part_name(unsigned int part_id)
 
 	return NULL;
 }
-EXPORT_SYMBOL(socinfo_get_partinfo_part_name);
+EXPORT_SYMBOL_GPL(socinfo_get_partinfo_part_name);
 
 uint32_t socinfo_get_partinfo_chip_id(unsigned int part_id)
 {
@@ -2023,7 +2024,7 @@ uint32_t socinfo_get_partinfo_chip_id(unsigned int part_id)
 
 	return chip_id;
 }
-EXPORT_SYMBOL(socinfo_get_partinfo_chip_id);
+EXPORT_SYMBOL_GPL(socinfo_get_partinfo_chip_id);
 
 uint32_t socinfo_get_partinfo_vulkan_id(unsigned int part_id)
 {
@@ -2032,7 +2033,7 @@ uint32_t socinfo_get_partinfo_vulkan_id(unsigned int part_id)
 
 	return partinfo[part_id].gpu_info.vulkan_id;
 }
-EXPORT_SYMBOL(socinfo_get_partinfo_vulkan_id);
+EXPORT_SYMBOL_GPL(socinfo_get_partinfo_vulkan_id);
 
 int socinfo_get_oem_variant_id(void)
 {
@@ -2043,7 +2044,7 @@ int socinfo_get_oem_variant_id(void)
 
 	return socinfo_get_platform_oem_variant();
 }
-EXPORT_SYMBOL(socinfo_get_oem_variant_id);
+EXPORT_SYMBOL_GPL(socinfo_get_oem_variant_id);
 
 void socinfo_enumerate_partinfo_details(void)
 {

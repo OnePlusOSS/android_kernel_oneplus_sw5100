@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/scmi_protocol.h>
@@ -123,7 +124,7 @@ int c1dcvs_enable(bool enable)
 
 	return ret;
 }
-EXPORT_SYMBOL(c1dcvs_enable);
+EXPORT_SYMBOL_GPL(c1dcvs_enable);
 
 store_c1dcvs_attr(enable_trace);
 show_c1dcvs_attr(enable_trace);

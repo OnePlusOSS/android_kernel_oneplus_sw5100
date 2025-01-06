@@ -88,17 +88,12 @@ module_param_named(
 );
 
 static uint32_t rpm_msg_fmt_ver;
-module_param_named(
-	rpm_msg_fmt_ver, rpm_msg_fmt_ver, uint, 0444
-);
 
 struct msm_rpm_driver_data {
 	const char *ch_name;
 	uint32_t ch_type;
 	struct smd_channel *ch_info;
 	struct work_struct work;
-	spinlock_t smd_lock_write;
-	spinlock_t smd_lock_read;
 	struct completion smd_open;
 };
 
@@ -211,7 +206,6 @@ enum rpm_msg_fmts {
 };
 
 static struct rb_root tr_root = RB_ROOT;
-static int msm_rpm_send_smd_buffer(char *buf, uint32_t size);
 static uint32_t msm_rpm_get_next_msg_id(void);
 
 static inline uint32_t get_offset_value(uint32_t val, uint32_t offset,
@@ -727,8 +721,8 @@ static int msm_rpm_flush_requests(void)
 
 		set_msg_id(s->buf, msm_rpm_get_next_msg_id());
 
-		ret = msm_rpm_send_smd_buffer(s->buf,
-					get_buf_len(s->buf));
+		ret = rpmsg_send(rpm->rpm_channel, s->buf, get_buf_len(s->buf));
+
 		WARN_ON(ret != 0);
 		trace_rpm_smd_send_sleep_set(get_msg_id(s->buf), type, id);
 
@@ -907,7 +901,7 @@ void msm_rpm_free_request(struct msm_rpm_request *handle)
 	kfree(handle->buf);
 	kfree(handle);
 }
-EXPORT_SYMBOL(msm_rpm_free_request);
+EXPORT_SYMBOL_GPL(msm_rpm_free_request);
 
 struct msm_rpm_request *msm_rpm_create_request(
 		enum msm_rpm_set set, uint32_t rsc_type,
@@ -916,7 +910,7 @@ struct msm_rpm_request *msm_rpm_create_request(
 	return msm_rpm_create_request_common(set, rsc_type, rsc_id,
 			num_elements);
 }
-EXPORT_SYMBOL(msm_rpm_create_request);
+EXPORT_SYMBOL_GPL(msm_rpm_create_request);
 
 int msm_rpm_add_kvp_data(struct msm_rpm_request *handle,
 		uint32_t key, const uint8_t *data, int size)
@@ -924,7 +918,7 @@ int msm_rpm_add_kvp_data(struct msm_rpm_request *handle,
 	return msm_rpm_add_kvp_data_common(handle, key, data, size);
 
 }
-EXPORT_SYMBOL(msm_rpm_add_kvp_data);
+EXPORT_SYMBOL_GPL(msm_rpm_add_kvp_data);
 
 int msm_rpm_add_kvp_data_noirq(struct msm_rpm_request *handle,
 		uint32_t key, const uint8_t *data, int size)
@@ -932,7 +926,7 @@ int msm_rpm_add_kvp_data_noirq(struct msm_rpm_request *handle,
 	return msm_rpm_add_kvp_data_common(handle, key, data, size);
 
 }
-EXPORT_SYMBOL(msm_rpm_add_kvp_data_noirq);
+EXPORT_SYMBOL_GPL(msm_rpm_add_kvp_data_noirq);
 
 bool msm_rpm_waiting_for_ack(void)
 {
@@ -1190,17 +1184,6 @@ static void msm_rpm_log_request(struct msm_rpm_request *cdata)
 	pr_info("request info %s\n", buf);
 }
 
-static int msm_rpm_send_smd_buffer(char *buf, uint32_t size)
-{
-	unsigned long flags;
-	int ret;
-
-	spin_lock_irqsave(&msm_rpm_data.smd_lock_write, flags);
-	ret = rpmsg_send(rpm->rpm_channel, buf, size);
-	spin_unlock_irqrestore(&msm_rpm_data.smd_lock_write, flags);
-	return ret;
-}
-
 static int msm_rpm_send_data(struct msm_rpm_request *cdata,
 		int msg_type, bool noack)
 {
@@ -1295,7 +1278,7 @@ static int msm_rpm_send_data(struct msm_rpm_request *cdata,
 
 	msm_rpm_add_wait_list(msg_id, noack);
 
-	ret = msm_rpm_send_smd_buffer(&cdata->buf[0], msg_size);
+	ret = rpmsg_send(rpm->rpm_channel, &cdata->buf[0], msg_size);
 
 	if (!ret) {
 		for (i = 0; (i < cdata->write_idx); i++)
@@ -1334,13 +1317,13 @@ int msm_rpm_send_request_noirq(struct msm_rpm_request *handle)
 {
 	return _msm_rpm_send_request(handle, false);
 }
-EXPORT_SYMBOL(msm_rpm_send_request_noirq);
+EXPORT_SYMBOL_GPL(msm_rpm_send_request_noirq);
 
 int msm_rpm_send_request(struct msm_rpm_request *handle)
 {
 	return _msm_rpm_send_request(handle, false);
 }
-EXPORT_SYMBOL(msm_rpm_send_request);
+EXPORT_SYMBOL_GPL(msm_rpm_send_request);
 
 void *msm_rpm_send_request_noack(struct msm_rpm_request *handle)
 {
@@ -1350,7 +1333,7 @@ void *msm_rpm_send_request_noack(struct msm_rpm_request *handle)
 
 	return ret < 0 ? ERR_PTR(ret) : NULL;
 }
-EXPORT_SYMBOL(msm_rpm_send_request_noack);
+EXPORT_SYMBOL_GPL(msm_rpm_send_request_noack);
 
 int msm_rpm_wait_for_ack(uint32_t msg_id)
 {
@@ -1380,13 +1363,13 @@ int msm_rpm_wait_for_ack(uint32_t msg_id)
 
 	return rc;
 }
-EXPORT_SYMBOL(msm_rpm_wait_for_ack);
+EXPORT_SYMBOL_GPL(msm_rpm_wait_for_ack);
 
 int msm_rpm_wait_for_ack_noirq(uint32_t msg_id)
 {
 	return msm_rpm_wait_for_ack(msg_id);
 }
-EXPORT_SYMBOL(msm_rpm_wait_for_ack_noirq);
+EXPORT_SYMBOL_GPL(msm_rpm_wait_for_ack_noirq);
 
 void *msm_rpm_send_message_noack(enum msm_rpm_set set, uint32_t rsc_type,
 		uint32_t rsc_id, struct msm_rpm_kvp *kvp, int nelems)
@@ -1413,7 +1396,7 @@ bail:
 	msm_rpm_free_request(req);
 	return rc < 0 ? ERR_PTR(rc) : NULL;
 }
-EXPORT_SYMBOL(msm_rpm_send_message_noack);
+EXPORT_SYMBOL_GPL(msm_rpm_send_message_noack);
 
 int msm_rpm_send_message(enum msm_rpm_set set, uint32_t rsc_type,
 		uint32_t rsc_id, struct msm_rpm_kvp *kvp, int nelems)
@@ -1440,7 +1423,7 @@ bail:
 	msm_rpm_free_request(req);
 	return rc;
 }
-EXPORT_SYMBOL(msm_rpm_send_message);
+EXPORT_SYMBOL_GPL(msm_rpm_send_message);
 
 int msm_rpm_send_message_noirq(enum msm_rpm_set set, uint32_t rsc_type,
 			uint32_t rsc_id, struct msm_rpm_kvp *kvp, int nelems)
@@ -1448,7 +1431,7 @@ int msm_rpm_send_message_noirq(enum msm_rpm_set set, uint32_t rsc_type,
 
 	return msm_rpm_send_message(set, rsc_type, rsc_id, kvp, nelems);
 }
-EXPORT_SYMBOL(msm_rpm_send_message_noirq);
+EXPORT_SYMBOL_GPL(msm_rpm_send_message_noirq);
 
 static int smd_mask_receive_interrupt(bool mask,
 		const struct cpumask *cpumask)
@@ -1696,8 +1679,6 @@ static int qcom_smd_rpm_probe(struct rpmsg_device *rpdev)
 
 	mutex_init(&rpm->lock);
 	init_completion(&rpm->ack);
-	spin_lock_init(&msm_rpm_data.smd_lock_write);
-	spin_lock_init(&msm_rpm_data.smd_lock_read);
 
 skip_init:
 	probe_status = of_platform_populate(p, NULL, NULL, &rpdev->dev);
@@ -1779,7 +1760,7 @@ int qcom_smd_rpm_quickboot(struct rpmsg_device *rpdev, int status)
 
 	return 0;
 }
-EXPORT_SYMBOL(qcom_smd_rpm_quickboot);
+EXPORT_SYMBOL_GPL(qcom_smd_rpm_quickboot);
 
 static const struct of_device_id rpm_of_match[] = {
 	{ .compatible = "qcom,rpm-smd" },

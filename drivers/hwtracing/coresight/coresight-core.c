@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2012, 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -93,13 +93,13 @@ void coresight_set_csr_ops(const struct csr_set_atid_op *csr_op)
 {
 	csr_set_atid_ops = csr_op;
 }
-EXPORT_SYMBOL(coresight_set_csr_ops);
+EXPORT_SYMBOL_GPL(coresight_set_csr_ops);
 
 void coresight_remove_csr_ops(void)
 {
 	csr_set_atid_ops = NULL;
 }
-EXPORT_SYMBOL(coresight_remove_csr_ops);
+EXPORT_SYMBOL_GPL(coresight_remove_csr_ops);
 
 static int coresight_id_match(struct device *dev, void *data)
 {
@@ -1681,13 +1681,8 @@ static int coresight_remove_match(struct device *dev, void *data)
 		if (csdev->dev.fwnode == conn->child_fwnode) {
 			iterator->orphan = true;
 			coresight_remove_links(iterator, conn);
-			/*
-			 * Drop the reference to the handle for the remote
-			 * device acquired in parsing the connections from
-			 * platform data.
-			 */
-			fwnode_handle_put(conn->child_fwnode);
-			conn->child_fwnode = NULL;
+
+			conn->child_dev = NULL;
 			/* No need to continue */
 			break;
 		}

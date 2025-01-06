@@ -46,15 +46,6 @@ module_param(napi_tx, bool, 0644);
 
 #define VIRTIO_XDP_FLAG	BIT(0)
 
-/* Timestamp length */
-#define HW_TIMESTAMP_LEN	8
-
-/* Guest can handle H/W timestamp in. */
-#define VIRTIO_NET_F_GUEST_TS	50
-
-/* H/W timestamp */
-#define VIRTIO_NET_HDR_F_TIMESTAMP	128
-
 /* RX packet size EWMA. The average packet size is used to determine the packet
  * buffer size when refilling RX rings. As the entire RX ring may be refilled
  * at once, the weight is chosen so that the EWMA will be insensitive to short-
@@ -252,9 +243,6 @@ struct virtnet_info {
 
 	/* failover when STANDBY feature enabled */
 	struct failover *failover;
-
-	/* RX H/W timestamp control */
-	bool rx_hwts_enabled;
 };
 
 struct padded_vnet_hdr {
@@ -691,8 +679,13 @@ static struct page *xdp_linearize_page(struct receive_queue *rq,
 				       int page_off,
 				       unsigned int *len)
 {
-	struct page *page = alloc_page(GFP_ATOMIC);
+	int tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+	struct page *page;
 
+	if (page_off + *len + tailroom > PAGE_SIZE)
+		return NULL;
+
+	page = alloc_page(GFP_ATOMIC);
 	if (!page)
 		return NULL;
 
@@ -700,7 +693,6 @@ static struct page *xdp_linearize_page(struct receive_queue *rq,
 	page_off += *len;
 
 	while (--*num_buf) {
-		int tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 		unsigned int buflen;
 		void *buf;
 		int off;
@@ -1170,8 +1162,6 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 	struct net_device *dev = vi->dev;
 	struct sk_buff *skb;
 	struct virtio_net_hdr_mrg_rxbuf *hdr;
-	struct skb_shared_hwtstamps *ts;
-	s64 hwts;
 
 	if (unlikely(len < vi->hdr_len + ETH_HLEN)) {
 		pr_debug("%s: short packet %i\n", dev->name, len);
@@ -1198,17 +1188,6 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 		return;
 
 	hdr = skb_vnet_hdr(skb);
-
-	if (hdr->hdr.flags & VIRTIO_NET_HDR_F_TIMESTAMP) {
-		stats->bytes -= HW_TIMESTAMP_LEN;
-		skb_copy_bits(skb, skb->len - HW_TIMESTAMP_LEN, &hwts, HW_TIMESTAMP_LEN);
-		pskb_trim(skb, skb->len - HW_TIMESTAMP_LEN);
-		if (vi->rx_hwts_enabled) {
-			ts = skb_hwtstamps(skb);
-			if (ts)
-				ts->hwtstamp = ns_to_ktime(virtio64_to_cpu(vi->vdev, hwts));
-		}
-	}
 
 	if (hdr->hdr.flags & VIRTIO_NET_HDR_F_DATA_VALID)
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -1625,6 +1604,38 @@ static int virtnet_poll(struct napi_struct *napi, int budget)
 	return received;
 }
 
+static void virtnet_disable_queue_pair(struct virtnet_info *vi, int qp_index)
+{
+	virtnet_napi_tx_disable(&vi->sq[qp_index].napi);
+	napi_disable(&vi->rq[qp_index].napi);
+	xdp_rxq_info_unreg(&vi->rq[qp_index].xdp_rxq);
+}
+
+static int virtnet_enable_queue_pair(struct virtnet_info *vi, int qp_index)
+{
+	struct net_device *dev = vi->dev;
+	int err;
+
+	err = xdp_rxq_info_reg(&vi->rq[qp_index].xdp_rxq, dev, qp_index,
+			       vi->rq[qp_index].napi.napi_id);
+	if (err < 0)
+		return err;
+
+	err = xdp_rxq_info_reg_mem_model(&vi->rq[qp_index].xdp_rxq,
+					 MEM_TYPE_PAGE_SHARED, NULL);
+	if (err < 0)
+		goto err_xdp_reg_mem_model;
+
+	virtnet_napi_enable(vi->rq[qp_index].vq, &vi->rq[qp_index].napi);
+	virtnet_napi_tx_enable(vi, vi->sq[qp_index].vq, &vi->sq[qp_index].napi);
+
+	return 0;
+
+err_xdp_reg_mem_model:
+	xdp_rxq_info_unreg(&vi->rq[qp_index].xdp_rxq);
+	return err;
+}
+
 static int virtnet_open(struct net_device *dev)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
@@ -1638,22 +1649,20 @@ static int virtnet_open(struct net_device *dev)
 			if (!try_fill_recv(vi, &vi->rq[i], GFP_KERNEL))
 				schedule_delayed_work(&vi->refill, 0);
 
-		err = xdp_rxq_info_reg(&vi->rq[i].xdp_rxq, dev, i, vi->rq[i].napi.napi_id);
+		err = virtnet_enable_queue_pair(vi, i);
 		if (err < 0)
-			return err;
-
-		err = xdp_rxq_info_reg_mem_model(&vi->rq[i].xdp_rxq,
-						 MEM_TYPE_PAGE_SHARED, NULL);
-		if (err < 0) {
-			xdp_rxq_info_unreg(&vi->rq[i].xdp_rxq);
-			return err;
-		}
-
-		virtnet_napi_enable(vi->rq[i].vq, &vi->rq[i].napi);
-		virtnet_napi_tx_enable(vi, vi->sq[i].vq, &vi->sq[i].napi);
+			goto err_enable_qp;
 	}
 
 	return 0;
+
+err_enable_qp:
+	disable_delayed_refill(vi);
+	cancel_delayed_work_sync(&vi->refill);
+
+	for (i--; i >= 0; i--)
+		virtnet_disable_queue_pair(vi, i);
+	return err;
 }
 
 static int virtnet_poll_tx(struct napi_struct *napi, int budget)
@@ -2019,11 +2028,8 @@ static int virtnet_close(struct net_device *dev)
 	/* Make sure refill_work doesn't re-enable napi! */
 	cancel_delayed_work_sync(&vi->refill);
 
-	for (i = 0; i < vi->max_queue_pairs; i++) {
-		napi_disable(&vi->rq[i].napi);
-		xdp_rxq_info_unreg(&vi->rq[i].xdp_rxq);
-		virtnet_napi_tx_disable(&vi->sq[i].napi);
-	}
+	for (i = 0; i < vi->max_queue_pairs; i++)
+		virtnet_disable_queue_pair(vi, i);
 
 	return 0;
 }
@@ -2469,31 +2475,6 @@ static void virtnet_update_settings(struct virtnet_info *vi)
 		vi->duplex = duplex;
 }
 
-static int ethtool_op_get_ts_info_plus(struct net_device *dev, struct ethtool_ts_info *eti)
-{
-	struct virtnet_info *vi = netdev_priv(dev);
-	int flag = ethtool_op_get_ts_info(dev, eti);
-
-	if (flag) {
-		/* calling the default failed */
-		return flag;
-	}
-
-	/* set TX */
-	eti->tx_types = HWTSTAMP_TX_OFF;
-
-	/* set RX */
-	if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_GUEST_TS)) {
-		eti->rx_filters = HWTSTAMP_FILTER_ALL;
-		eti->so_timestamping |= (SOF_TIMESTAMPING_RX_HARDWARE
-					| SOF_TIMESTAMPING_RAW_HARDWARE);
-	} else {
-		eti->rx_filters = HWTSTAMP_FILTER_NONE;
-	}
-
-	return 0;
-}
-
 static const struct ethtool_ops virtnet_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_MAX_FRAMES,
 	.get_drvinfo = virtnet_get_drvinfo,
@@ -2504,7 +2485,7 @@ static const struct ethtool_ops virtnet_ethtool_ops = {
 	.get_ethtool_stats = virtnet_get_ethtool_stats,
 	.set_channels = virtnet_set_channels,
 	.get_channels = virtnet_get_channels,
-	.get_ts_info = ethtool_op_get_ts_info_plus,
+	.get_ts_info = ethtool_op_get_ts_info,
 	.get_link_ksettings = virtnet_get_link_ksettings,
 	.set_link_ksettings = virtnet_set_link_ksettings,
 	.set_coalesce = virtnet_set_coalesce,
@@ -2753,54 +2734,6 @@ static int virtnet_set_features(struct net_device *dev,
 	return 0;
 }
 
-static int virtnet_ioctl(struct net_device *dev, struct ifreq *if_r, int io_cmd)
-{
-	struct virtnet_info *vi = netdev_priv(dev);
-	struct hwtstamp_config ts_cfg;
-	int flag = 0;
-
-	switch (io_cmd) {
-	case SIOCGHWTSTAMP:
-		memset(&ts_cfg, 0, sizeof(ts_cfg));
-		ts_cfg.tx_type = HWTSTAMP_TX_OFF;
-		ts_cfg.rx_filter = vi->rx_hwts_enabled ? HWTSTAMP_FILTER_ALL : HWTSTAMP_FILTER_NONE;
-		if (copy_to_user(if_r->ifr_data, &ts_cfg, sizeof(ts_cfg)))
-			flag = -EFAULT;
-
-		break;
-
-	case SIOCSHWTSTAMP:
-		if (copy_from_user(&ts_cfg, if_r->ifr_data, sizeof(ts_cfg))) {
-			flag = -EFAULT;
-		} else {
-			if (ts_cfg.flags || ts_cfg.tx_type != HWTSTAMP_TX_OFF) {
-				flag = -EINVAL;
-			} else {
-				if (ts_cfg.rx_filter != HWTSTAMP_FILTER_NONE)
-					ts_cfg.rx_filter = HWTSTAMP_FILTER_ALL;
-
-				if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_GUEST_TS)) {
-					vi->rx_hwts_enabled = (ts_cfg.rx_filter ==
-								HWTSTAMP_FILTER_ALL);
-				} else {
-					vi->rx_hwts_enabled = false;
-					ts_cfg.rx_filter = HWTSTAMP_FILTER_NONE;
-				}
-
-				if (copy_to_user(if_r->ifr_data, &ts_cfg, sizeof(ts_cfg)))
-					flag = -EFAULT;
-			}
-		}
-		break;
-
-	default:
-		flag = -EOPNOTSUPP;
-		break;
-	}
-
-	return flag;
-}
-
 static const struct net_device_ops virtnet_netdev = {
 	.ndo_open            = virtnet_open,
 	.ndo_stop   	     = virtnet_close,
@@ -2816,7 +2749,6 @@ static const struct net_device_ops virtnet_netdev = {
 	.ndo_features_check	= passthru_features_check,
 	.ndo_get_phys_port_name	= virtnet_get_phys_port_name,
 	.ndo_set_features	= virtnet_set_features,
-	.ndo_eth_ioctl		= virtnet_ioctl,
 };
 
 static void virtnet_config_changed_work(struct work_struct *work)
@@ -2909,6 +2841,27 @@ static void free_receive_page_frags(struct virtnet_info *vi)
 			put_page(vi->rq[i].alloc_frag.page);
 }
 
+static void virtnet_sq_free_unused_buf(struct virtqueue *vq, void *buf)
+{
+	if (!is_xdp_frame(buf))
+		dev_kfree_skb(buf);
+	else
+		xdp_return_frame(ptr_to_xdp(buf));
+}
+
+static void virtnet_rq_free_unused_buf(struct virtqueue *vq, void *buf)
+{
+	struct virtnet_info *vi = vq->vdev->priv;
+	int i = vq2rxq(vq);
+
+	if (vi->mergeable_rx_bufs)
+		put_page(virt_to_head_page(buf));
+	else if (vi->big_packets)
+		give_pages(&vi->rq[i], buf);
+	else
+		put_page(virt_to_head_page(buf));
+}
+
 static void free_unused_bufs(struct virtnet_info *vi)
 {
 	void *buf;
@@ -2916,26 +2869,16 @@ static void free_unused_bufs(struct virtnet_info *vi)
 
 	for (i = 0; i < vi->max_queue_pairs; i++) {
 		struct virtqueue *vq = vi->sq[i].vq;
-		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
-			if (!is_xdp_frame(buf))
-				dev_kfree_skb(buf);
-			else
-				xdp_return_frame(ptr_to_xdp(buf));
-		}
+		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL)
+			virtnet_sq_free_unused_buf(vq, buf);
+		cond_resched();
 	}
 
 	for (i = 0; i < vi->max_queue_pairs; i++) {
 		struct virtqueue *vq = vi->rq[i].vq;
-
-		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL) {
-			if (vi->mergeable_rx_bufs) {
-				put_page(virt_to_head_page(buf));
-			} else if (vi->big_packets) {
-				give_pages(&vi->rq[i], buf);
-			} else {
-				put_page(virt_to_head_page(buf));
-			}
-		}
+		while ((buf = virtqueue_detach_unused_buf(vq)) != NULL)
+			virtnet_rq_free_unused_buf(vq, buf);
+		cond_resched();
 	}
 }
 
@@ -3388,6 +3331,8 @@ static int virtnet_probe(struct virtio_device *vdev)
 
 	virtio_device_ready(vdev);
 
+	_virtnet_set_queues(vi, vi->curr_queue_pairs);
+
 	rtnl_unlock();
 
 	err = virtnet_cpu_notif_add(vi);
@@ -3395,8 +3340,6 @@ static int virtnet_probe(struct virtio_device *vdev)
 		pr_debug("virtio_net: registering cpu notifier failed\n");
 		goto free_unregister_netdev;
 	}
-
-	virtnet_set_queues(vi, vi->curr_queue_pairs);
 
 	/* Assume link up if device can't report link status,
 	   otherwise get link status from config. */
@@ -3513,8 +3456,7 @@ static struct virtio_device_id id_table[] = {
 	VIRTIO_NET_F_GUEST_ANNOUNCE, VIRTIO_NET_F_MQ, \
 	VIRTIO_NET_F_CTRL_MAC_ADDR, \
 	VIRTIO_NET_F_MTU, VIRTIO_NET_F_CTRL_GUEST_OFFLOADS, \
-	VIRTIO_NET_F_SPEED_DUPLEX, VIRTIO_NET_F_STANDBY, \
-	VIRTIO_NET_F_GUEST_TS
+	VIRTIO_NET_F_SPEED_DUPLEX, VIRTIO_NET_F_STANDBY
 
 static unsigned int features[] = {
 	VIRTNET_FEATURES,

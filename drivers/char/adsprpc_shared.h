@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef ADSPRPC_SHARED_H
 #define ADSPRPC_SHARED_H
@@ -120,8 +120,13 @@
 #define NUM_CHANNELS	(MAX_DOMAIN_ID + 1)	/* adsp, mdsp, slpi, cdsp, cdsp1, gpdsp, gpdsp1*/
 #define NUM_SESSIONS	13	/* max 12 compute, 1 cpz */
 
+#define RH_CID ADSP_DOMAIN_ID
+
 #define VALID_FASTRPC_CID(cid) \
 	(cid >= ADSP_DOMAIN_ID && cid < NUM_CHANNELS)
+
+#define GET_DEV_FROM_CID(me, cid) \
+	((me->dev[cid] == NULL) ? me->dev[RH_CID] : me->dev[cid])
 
 #define REMOTE_SCALARS_LENGTH(sc)	(REMOTE_SCALARS_INBUFS(sc) +\
 					REMOTE_SCALARS_OUTBUFS(sc) +\
@@ -681,9 +686,14 @@ enum fastrpc_buf_type {
 
 /* Types of RPC calls to DSP */
 enum fastrpc_msg_type {
+	/* 64 bit user application invoke message */
 	USER_MSG = 0,
+	/* kernel invoke message with zero pid */
 	KERNEL_MSG_WITH_ZERO_PID,
+	/* kernel invoke message with non zero pid to kill the PD in DSP */
 	KERNEL_MSG_WITH_NONZERO_PID,
+	/* 32 bit user application invoke message */
+	COMPAT_MSG,
 };
 
 #define DSPSIGNAL_TIMEOUT_NONE 0xffffffff
@@ -784,7 +794,7 @@ struct smq_notif_rsp {
 struct smq_invoke_ctx {
 	struct hlist_node hn;
 	/* Async node to add to async job ctx list */
-	struct list_head asyncn;
+	struct hlist_node asyncn;
 	struct completion work;
 	int retval;
 	int pid;
@@ -831,7 +841,7 @@ struct fastrpc_ctx_lst {
 	/* Number of active contexts queued to DSP */
 	uint32_t num_active_ctxs;
 	/* Queue which holds all async job contexts of process */
-	struct list_head async_queue;
+	struct hlist_head async_queue;
 	/* Queue which holds all status notifications of process */
 	struct list_head notif_queue;
 };
@@ -889,7 +899,7 @@ struct fastrpc_channel_ctx {
 	struct mutex smd_mutex;
 	uint64_t sesscount;
 	uint64_t ssrcount;
-	int in_hib;
+	int hib_state;
 	void *handle;
 	uint64_t prevssrcount;
 	int subsystemstate;
@@ -923,7 +933,7 @@ struct fastrpc_apps {
 	int compat;
 	struct hlist_head drivers;
 	spinlock_t hlock;
-	struct device *dev;
+	struct device *dev[NUM_CHANNELS];
 	/* Indicates fastrpc device node info */
 	struct device *dev_fastrpc;
 	unsigned int latency;
@@ -976,8 +986,8 @@ struct fastrpc_mmap {
 	bool in_use;				/* Indicates if persistent map is in use*/
 	struct timespec64 map_start_time;
 	struct timespec64 map_end_time;
-	/* Mapping for fastrpc shell */
-	bool is_filemap;
+	bool is_filemap;			/* flag to indicate map used in process init */
+	bool is_dumped;				/* flag to indicate map is dumped during SSR */
 	char *servloc_name;			/* Indicate which daemon mapped this */
 	unsigned int ctx_refs; /* Indicates reference count for context map */
 };
@@ -1019,6 +1029,13 @@ struct fastrpc_dspsignal {
 	int state;
 };
 
+struct memory_snapshot {
+	/* Total size of heap buffers allocated in userspace */
+	size_t heap_bufs_size;
+	/* Total size of non-heap buffers allocated in userspace */
+	size_t nonheap_bufs_size;
+};
+
 struct fastrpc_file {
 	struct hlist_node hn;
 	spinlock_t hlock;
@@ -1036,6 +1053,8 @@ struct fastrpc_file {
 	struct fastrpc_buf *pers_hdr_buf;
 	/* Pre-allocated buffer divided into N chunks */
 	struct fastrpc_buf *hdr_bufs;
+	/* Store snapshot of memory occupied by different buffers */
+	struct memory_snapshot mem_snap;
 
 	struct fastrpc_session_ctx *secsctx;
 	uint32_t mode;
@@ -1093,8 +1112,6 @@ struct fastrpc_file {
 	/* Flag to indicate dynamic process creation status*/
 	enum fastrpc_process_create_state dsp_process_state;
 	bool is_unsigned_pd;
-	/* Flag to indicate 32 bit driver*/
-	bool is_compat;
 	/* Completion objects and state for dspsignals */
 	struct fastrpc_dspsignal *signal_groups[DSPSIGNAL_NUM_SIGNALS / DSPSIGNAL_GROUP_SIZE];
 	spinlock_t dspsignals_lock;
@@ -1133,7 +1150,7 @@ int fastrpc_internal_invoke(struct fastrpc_file *fl, uint32_t mode,
 				   struct fastrpc_ioctl_invoke_async *inv);
 
 int fastrpc_internal_invoke2(struct fastrpc_file *fl,
-				struct fastrpc_ioctl_invoke2 *inv2);
+				struct fastrpc_ioctl_invoke2 *inv2, bool is_compat);
 
 int fastrpc_internal_munmap(struct fastrpc_file *fl,
 				   struct fastrpc_ioctl_munmap *ud);

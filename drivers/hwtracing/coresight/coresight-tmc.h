@@ -2,7 +2,7 @@
 /*
  * Copyright(C) 2015 Linaro Limited. All rights reserved.
  * Author: Mathieu Poirier <mathieu.poirier@linaro.org>
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _CORESIGHT_TMC_H
@@ -15,7 +15,6 @@
 #include <linux/refcount.h>
 #include "coresight-priv.h"
 #include "coresight-byte-cntr.h"
-#include "coresight-tmc-eth.h"
 #include "coresight-tmc-usb.h"
 
 #define TMC_RSZ			0x004
@@ -153,14 +152,12 @@ enum tmc_etr_out_mode {
 	TMC_ETR_OUT_MODE_NONE,
 	TMC_ETR_OUT_MODE_MEM,
 	TMC_ETR_OUT_MODE_USB,
-	TMC_ETR_OUT_MODE_ETH,
 };
 
 static const char * const str_tmc_etr_out_mode[] = {
 	[TMC_ETR_OUT_MODE_NONE]		= "none",
 	[TMC_ETR_OUT_MODE_MEM]		= "mem",
 	[TMC_ETR_OUT_MODE_USB]		= "usb",
-	[TMC_ETR_OUT_MODE_ETH]		= "eth",
 };
 
 /**
@@ -251,8 +248,20 @@ struct tmc_drvdata {
 	u8			mode_support;
 	enum tmc_etr_out_mode	out_mode;
 	struct tmc_usb_data	*usb_data;
-	struct tmc_eth_data	*eth_data;
 	bool			stop_on_flush;
+};
+
+struct tmc_usb_bam_data {
+	struct sps_bam_props	props;
+	unsigned long		handle;
+	struct sps_pipe		*pipe;
+	struct sps_connect	connect;
+	uint32_t		src_pipe_idx;
+	unsigned long		dest;
+	uint32_t		dest_pipe_idx;
+	struct sps_mem_buffer	desc_fifo;
+	struct sps_mem_buffer	data_fifo;
+	bool			enable;
 };
 
 struct etr_buf_operations {
@@ -321,7 +330,7 @@ ssize_t tmc_etr_buf_get_data(struct etr_buf *etr_buf,
 /* ETR functions */
 int tmc_read_prepare_etr(struct tmc_drvdata *drvdata);
 int tmc_read_unprepare_etr(struct tmc_drvdata *drvdata);
-void tmc_etr_disable_hw(struct tmc_drvdata *drvdata);
+void tmc_etr_disable_hw(struct tmc_drvdata *drvdata, bool flush);
 struct byte_cntr *byte_cntr_init(struct amba_device *adev,
 					struct tmc_drvdata *drvdata);
 void byte_cntr_remove(struct byte_cntr *byte_cntr);
@@ -379,7 +388,7 @@ ssize_t tmc_sg_table_get_data(struct tmc_sg_table *sg_table,
 static inline unsigned long
 tmc_sg_table_buf_size(struct tmc_sg_table *sg_table)
 {
-	return sg_table->data_pages.nr_pages << PAGE_SHIFT;
+	return (unsigned long)sg_table->data_pages.nr_pages << PAGE_SHIFT;
 }
 
 struct coresight_device *tmc_etr_get_catu_device(struct tmc_drvdata *drvdata);

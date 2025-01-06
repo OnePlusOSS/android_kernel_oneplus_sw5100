@@ -1080,19 +1080,19 @@ int core_ctl_set_boost(bool boost)
 
 	return ret;
 }
-EXPORT_SYMBOL(core_ctl_set_boost);
+EXPORT_SYMBOL_GPL(core_ctl_set_boost);
 
 void core_ctl_notifier_register(struct notifier_block *n)
 {
 	atomic_notifier_chain_register(&core_ctl_notifier, n);
 }
-EXPORT_SYMBOL(core_ctl_notifier_register);
+EXPORT_SYMBOL_GPL(core_ctl_notifier_register);
 
 void core_ctl_notifier_unregister(struct notifier_block *n)
 {
 	atomic_notifier_chain_unregister(&core_ctl_notifier, n);
 }
-EXPORT_SYMBOL(core_ctl_notifier_unregister);
+EXPORT_SYMBOL_GPL(core_ctl_notifier_unregister);
 
 static void core_ctl_call_notifier(void)
 {
@@ -1406,6 +1406,14 @@ static void __ref do_core_ctl(void)
 
 	core_ctl_pause_cpus(&cpus_to_pause);
 	core_ctl_resume_cpus(&cpus_to_unpause);
+
+	/* Update the final active cpus after the real resume and
+	 * pause actions.
+	 */
+	index = 0;
+	for_each_cluster(cluster, index) {
+		cluster->active_cpus = get_active_cpu_count(cluster);
+	}
 }
 
 static int __ref try_core_ctl(void *data)

@@ -40,7 +40,6 @@ static int try_to_freeze_tasks(bool user_only)
 	unsigned int elapsed_msecs;
 	bool wakeup = false;
 	int sleep_usecs = USEC_PER_MSEC;
-	bool todo_logging_on = false;
 
 	start = ktime_get_boottime();
 
@@ -100,10 +99,9 @@ static int try_to_freeze_tasks(bool user_only)
 		       todo - wq_busy, wq_busy);
 
 		if (wq_busy)
-			show_workqueue_state();
+			show_all_workqueues();
 
-		trace_android_vh_try_to_freeze_todo_logging(&todo_logging_on);
-		if (pm_debug_messages_on || todo_logging_on) {
+		if (pm_debug_messages_on) {
 			read_lock(&tasklist_lock);
 			for_each_process_thread(g, p) {
 				if (p != current && !freezer_should_skip(p)

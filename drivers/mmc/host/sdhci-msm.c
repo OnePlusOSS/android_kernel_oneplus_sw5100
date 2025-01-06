@@ -94,9 +94,6 @@
 #define FINE_TUNE_MODE_EN	BIT(27)
 #define BIAS_OK_SIGNAL		BIT(29)
 
-#define DLL_CONFIG_3_LOW_FREQ_VAL	0x08
-#define DLL_CONFIG_3_HIGH_FREQ_VAL	0x10
-
 #define CORE_VENDOR_SPEC_POR_VAL 0xa9c
 #define CORE_CLK_PWRSAVE	BIT(1)
 #define CORE_VNDR_SPEC_ADMA_ERR_SIZE_EN	BIT(7)
@@ -420,15 +417,15 @@ static void msm_set_clock_rate_for_bus_mode(struct sdhci_host *host,
 	}
 
 	/*
-         * Qualcomm Technologies, Inc. clock drivers by default round
-         * clock _up_ if they can't make the requested rate.  This is not
-         * good for SD.  Yell if we encounter it.
-         */
-        achieved_rate = clk_get_rate(core_clk);
-        if (achieved_rate > desired_rate)
-                pr_debug("%s: Card appears overclocked; req %u Hz, actual %lu Hz\n",
-                        mmc_hostname(host->mmc), desired_rate, achieved_rate);
-        host->mmc->actual_clock = achieved_rate / mult;
+	 * Qualcomm Technologies, Inc. clock drivers by default round
+	 * clock _up_ if they can't make the requested rate.  This is not
+	 * good for SD.  Yell if we encounter it.
+	 */
+	achieved_rate = clk_get_rate(core_clk);
+	if (achieved_rate > desired_rate)
+		pr_debug("%s: Card appears overclocked; req %u Hz, actual %lu Hz\n",
+			mmc_hostname(host->mmc), desired_rate, achieved_rate);
+	host->mmc->actual_clock = achieved_rate / mult;
 	msm_host->clk_rate = desired_rate;
 
 	pr_debug("%s: Setting clock at rate %lu at timing %d\n",
@@ -796,8 +793,6 @@ static int msm_init_cm_dll(struct sdhci_host *host,
 				| CORE_LOW_FREQ_MODE), host->ioaddr +
 				msm_offset->core_dll_config_2);
 		}
-		/* wait for 5us before enabling DLL clock */
-		udelay(5);
 	}
 
 	/*
@@ -809,28 +804,6 @@ static int msm_init_cm_dll(struct sdhci_host *host,
 			msm_offset->core_dll_config) |
 			(msm_host->dll_hsr->dll_config & 0xffff)),
 			host->ioaddr + msm_offset->core_dll_config);
-	}
-
-	/*
-	 * Configure DLL user control register to enable DLL status.
-	 * This setting is applicable to SDCC v5.1 onwards only.
-	 */
-	if (msm_host->uses_tassadar_dll) {
-		u32 config;
-		config = DLL_USR_CTL_POR_VAL | FINE_TUNE_MODE_EN |
-			ENABLE_DLL_LOCK_STATUS | BIAS_OK_SIGNAL;
-		writel_relaxed(config, host->ioaddr +
-				msm_offset->core_dll_usr_ctl);
-
-		config = readl_relaxed(host->ioaddr +
-				msm_offset->core_dll_config_3);
-		config &= ~0xFF;
-		if (msm_host->clk_rate < 150000000)
-			config |= DLL_CONFIG_3_LOW_FREQ_VAL;
-		else
-			config |= DLL_CONFIG_3_HIGH_FREQ_VAL;
-		writel_relaxed(config, host->ioaddr +
-			msm_offset->core_dll_config_3);
 	}
 
 	/* Step 11 - Wait for 52us */
@@ -2328,6 +2301,8 @@ static int sdhci_msm_vreg_init(struct device *dev,
 	int ret = 0;
 	struct sdhci_msm_vreg_data *curr_slot;
 	struct sdhci_msm_reg_data *curr_vdd_reg, *curr_vdd_io_reg;
+	struct mmc_host *mmc = msm_host->mmc;
+	struct sdhci_host *host = mmc_priv(mmc);
 
 	curr_slot = msm_host->vreg_data;
 	if (!curr_slot)
@@ -2349,8 +2324,15 @@ static int sdhci_msm_vreg_init(struct device *dev,
 		if (ret)
 			goto out;
 	}
-	if (curr_vdd_io_reg)
+	if (curr_vdd_io_reg) {
 		ret = sdhci_msm_vreg_init_reg(dev, curr_vdd_io_reg);
+
+		/* In eMMC case vdd-io might be a fixed 1.8V regulator */
+		if (mmc->caps & MMC_CAP_NONREMOVABLE &&
+			!regulator_is_supported_voltage(curr_vdd_io_reg->reg,
+				2700000, 3600000))
+			host->flags &= ~SDHCI_SIGNALING_330;
+	}
 out:
 	if (ret)
 		dev_err(dev, "vreg reset failed (%d)\n", ret);
@@ -2562,7 +2544,7 @@ static void sdhci_msm_handle_pwr_irq(struct sdhci_host *host, int irq)
 
 	/*
 	 * The driver has to acknowledge the interrupt, switch voltages and
-	 * report back if it succeded or not to this register. The voltage
+	 * report back if it succeeded or not to this register. The voltage
 	 * switches are handled by the sdhci core, so just report success.
 	 */
 	msm_host_writel(msm_host, irq_ack, host,
@@ -2626,7 +2608,7 @@ static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 	struct sdhci_msm_host *msm_host = sdhci_pltfm_priv(pltfm_host);
 
 	sdhci_msm_handle_pwr_irq(host, irq);
-	msm_host->pwr_irq_flag = 1;
+	msm_host->pwr_irq_flag = true;
 	sdhci_msm_complete_pwr_irq_wait(msm_host);
 
 	return IRQ_HANDLED;
@@ -2976,7 +2958,6 @@ sdhci_msm_ice_resume(struct sdhci_msm_host *msm_host)
 
 void sdhci_msm_ice_disable(struct sdhci_msm_host *msm_host)
 {
-	return;
 }
 #endif /* !CONFIG_MMC_CRYPTO */
 
@@ -3382,7 +3363,7 @@ static int __sdhci_msm_check_write(struct sdhci_host *host, u16 val, int reg)
 	}
 
 	if (req_type) {
-		msm_host->pwr_irq_flag = 0;
+		msm_host->pwr_irq_flag = false;
 		/*
 		 * Since this register write may trigger a power irq, ensure
 		 * all previous register writes are complete by this point.
@@ -3975,7 +3956,6 @@ static const struct sdhci_msm_variant_info sdm845_sdhci_var = {
 static const struct of_device_id sdhci_msm_dt_match[] = {
 	{.compatible = "qcom,sdhci-msm-v4", .data = &sdhci_msm_mci_var},
 	{.compatible = "qcom,sdhci-msm-v5", .data = &sdhci_msm_v5_var},
-	{.compatible = "qcom,sdm670-sdhci", .data = &sdm845_sdhci_var},
 	{.compatible = "qcom,sdm845-sdhci", .data = &sdm845_sdhci_var},
 	{},
 };
@@ -4012,12 +3992,6 @@ static int sdhci_msm_gcc_reset(struct device *dev, struct sdhci_host *host)
 
 	return ret;
 }
-static void sdhci_msm_hwkm_program_keys(struct sdhci_host *host)
-{
-	struct mmc_host *mmc = (host->mmc);
-	if (mmc->caps2 & MMC_CAP2_CRYPTO)
-		blk_ksm_reprogram_all_keys(&mmc->ksm);
-}
 
 static void sdhci_msm_hw_reset(struct sdhci_host *host)
 {
@@ -4048,10 +4022,6 @@ static void sdhci_msm_hw_reset(struct sdhci_host *host)
 	if (host->mmc->card && !pm_suspend_via_firmware())
 		mmc_power_cycle(host->mmc, host->mmc->card->ocr);
 #endif
-	if (pm_suspend_via_firmware()) {
-		sdhci_msm_hwkm_program_keys(host);
-	}
-	return;
 }
 
 static const struct sdhci_ops sdhci_msm_ops = {
@@ -4156,6 +4126,9 @@ static inline void sdhci_msm_get_of_property(struct platform_device *pdev,
 		msm_host->ddr_config = DDR_CONFIG_POR_VAL;
 
 	of_property_read_u32(node, "qcom,dll-config", &msm_host->dll_config);
+
+	if (of_device_is_compatible(node, "qcom,msm8916-sdhci"))
+		host->quirks2 |= SDHCI_QUIRK2_BROKEN_64_BIT_DMA;
 }
 
 static void sdhci_msm_clkgate_bus_delayed_work(struct work_struct *work)
@@ -4456,7 +4429,15 @@ static void sdhci_msm_qos_init(struct sdhci_msm_host *msm_host)
 	struct device_node *group_node;
 	struct sdhci_msm_qos_req *qr;
 	struct qos_cpu_group *qcg;
-	int i, err, mask = 0;
+
+	cpumask_t silver_mask;
+	cpumask_t gold_mask;
+	cpumask_t gold_prime_mask;
+	int cid_cpu[MAX_NUM_CLUSTERS] = {-1, -1, -1};
+	int cid = -1;
+	int prev_cid = -1;
+	int cpu;
+	int i, err;
 
 	qr = kzalloc(sizeof(*qr), GFP_KERNEL);
 	if (!qr)
@@ -4481,22 +4462,45 @@ static void sdhci_msm_qos_init(struct sdhci_msm_host *msm_host)
 	}
 
 	/*
+	 * Due to Logical contiguous CPU numbering, one to one mapping
+	 * between physical and logical cpu is no more applicable.
+	 * Hence we don't need to pass the qos mask from the device tree
+	 * and instead need to populate the mask dynamically
+	 * using available kernel API.
+	 */
+
+	for_each_cpu(cpu, cpu_possible_mask) {
+		cid = topology_physical_package_id(cpu);
+		if (cid != prev_cid) {
+			cid_cpu[cid] = cpu;
+			prev_cid = cid;
+		}
+	}
+
+	if (cid_cpu[SILVER_CORE] != -1)
+		silver_mask.bits[0] =
+			topology_core_cpumask(cid_cpu[SILVER_CORE])->bits[0];
+
+	if (cid_cpu[GOLD_CORE] != -1)
+		gold_mask.bits[0] =
+			topology_core_cpumask(cid_cpu[GOLD_CORE])->bits[0];
+
+	if (cid_cpu[GOLD_PRIME_CORE] != -1)
+		gold_prime_mask.bits[0] =
+			topology_core_cpumask(cid_cpu[GOLD_PRIME_CORE])->bits[0];
+
+	/*
 	 * Assign qos cpu group/cluster to host qos request and
 	 * read child entries of qos node
 	 */
 	qr->qcg = qcg;
+
 	for_each_available_child_of_node(np, group_node) {
-		err = of_property_read_u32(group_node, "mask", &mask);
-		if (err) {
-			dev_dbg(&pdev->dev, "Error reading group mask: %d\n",
-					err);
-			continue;
-		}
-		qcg->mask.bits[0] = mask & cpu_possible_mask->bits[0];
-		if (!cpumask_subset(&qcg->mask, cpu_possible_mask)) {
-			dev_err(&pdev->dev, "Invalid group mask\n");
-			goto out_vote_err;
-		}
+		if (of_property_read_bool(group_node, "perf"))
+			qcg->mask.bits[0] = gold_mask.bits[0] |
+						gold_prime_mask.bits[0];
+		else
+			qcg->mask.bits[0] = silver_mask.bits[0];
 
 		err = of_property_count_u32_elems(group_node, "vote");
 		if (err <= 0) {
@@ -5030,11 +5034,11 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		goto pltfm_free;
 
 	if (pdev->dev.of_node) {
-		ret = of_alias_get_id(pdev->dev.of_node, "sdhc");
-		if (ret <= 0)
+		ret = of_alias_get_id(pdev->dev.of_node, "mmc");
+		if (ret < 0)
 			dev_err(&pdev->dev, "get slot index failed %d\n", ret);
-		else if (ret <= 2)
-			sdhci_slot[ret-1] = msm_host;
+		else if (ret <= 1)
+			sdhci_slot[ret] = msm_host;
 	}
 
 	/*

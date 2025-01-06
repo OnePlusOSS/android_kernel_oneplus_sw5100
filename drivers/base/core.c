@@ -488,16 +488,6 @@ static void device_link_release_fn(struct work_struct *work)
 	pm_runtime_release_supplier(link);
 	pm_request_idle(link->supplier);
 
-	/*
-	 * If supplier_preactivated is set, the link has been dropped between
-	 * the pm_runtime_get_suppliers() and pm_runtime_put_suppliers() calls
-	 * in __driver_probe_device().  In that case, drop the supplier's
-	 * PM-runtime usage counter to remove the reference taken by
-	 * pm_runtime_get_suppliers().
-	 */
-	if (link->supplier_preactivated)
-		pm_runtime_put_noidle(link->supplier);
-
 	put_device(link->consumer);
 	put_device(link->supplier);
 	kfree(link);
@@ -3338,7 +3328,7 @@ int device_add(struct device *dev)
 	/* we require the name to be set before, and pass NULL */
 	error = kobject_add(&dev->kobj, dev->kobj.parent, NULL);
 	if (error) {
-		glue_dir = get_glue_dir(dev);
+		glue_dir = kobj;
 		goto Error;
 	}
 
@@ -3438,6 +3428,7 @@ done:
 	device_pm_remove(dev);
 	dpm_sysfs_remove(dev);
  DPMError:
+	dev->driver = NULL;
 	bus_remove_device(dev);
  BusError:
 	device_remove_attrs(dev);

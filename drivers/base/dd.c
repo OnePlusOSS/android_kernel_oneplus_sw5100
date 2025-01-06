@@ -352,7 +352,7 @@ late_initcall(deferred_probe_initcall);
 
 static void __exit deferred_probe_exit(void)
 {
-	debugfs_remove_recursive(debugfs_lookup("devices_deferred", NULL));
+	debugfs_lookup_and_remove("devices_deferred", NULL);
 }
 __exitcall(deferred_probe_exit);
 
@@ -690,7 +690,12 @@ static int really_probe_debug(struct device *dev, struct device_driver *drv)
 	calltime = ktime_get();
 	ret = really_probe(dev, drv);
 	rettime = ktime_get();
-	pr_debug("probe of %s returned %d after %lld usecs\n",
+	/*
+	 * Don't change this to pr_debug() because that requires
+	 * CONFIG_DYNAMIC_DEBUG and we want a simple 'initcall_debug' on the
+	 * kernel commandline to print this all the time at the debug level.
+	 */
+	printk(KERN_DEBUG "probe of %s returned %d after %lld usecs\n",
 		 dev_name(dev), ret, ktime_us_delta(rettime, calltime));
 	return ret;
 }
@@ -725,6 +730,29 @@ void wait_for_device_probe(void)
 	async_synchronize_full();
 }
 EXPORT_SYMBOL_GPL(wait_for_device_probe);
+
+/**
+ * flush_deferred_probe_now
+ *
+ * This function should be used sparingly. It's meant for when we need to flush
+ * the deferred probe list at earlier initcall levels. Really meant only for KVM
+ * needs. This function should never be exported because it makes no sense for
+ * modules to call this.
+ */
+void flush_deferred_probe_now(void)
+{
+	/*
+	 * Really shouldn't using this if deferred probe has already been
+	 * enabled
+	 */
+	if (WARN_ON(driver_deferred_probe_enable))
+		return;
+
+	driver_deferred_probe_enable = true;
+	driver_deferred_probe_trigger();
+	wait_for_device_probe();
+	driver_deferred_probe_enable = false;
+}
 
 static int __driver_probe_device(struct device_driver *drv, struct device *dev)
 {
@@ -1223,8 +1251,6 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 		else if (drv->remove)
 			drv->remove(dev);
 
-		device_links_driver_cleanup(dev);
-
 		devres_release_all(dev);
 		arch_teardown_dma_ops(dev);
 		kfree(dev->dma_range_map);
@@ -1235,6 +1261,8 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 			dev->pm_domain->dismiss(dev);
 		pm_runtime_reinit(dev);
 		dev_pm_set_driver_flags(dev, 0);
+
+		device_links_driver_cleanup(dev);
 
 		klist_remove(&dev->p->knode_driver);
 		device_pm_check_callbacks(dev);

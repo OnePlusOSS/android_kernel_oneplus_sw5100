@@ -942,10 +942,10 @@ EXPORT_SYMBOL_GPL(kprobe_event_cmd_init);
 /**
  * __kprobe_event_gen_cmd_start - Generate a kprobe event command from arg list
  * @cmd: A pointer to the dynevent_cmd struct representing the new event
+ * @kretprobe: Is this a return probe?
  * @name: The name of the kprobe event
  * @loc: The location of the kprobe event
- * @kretprobe: Is this a return probe?
- * @args: Variable number of arg (pairs), one pair for each field
+ * @...: Variable number of arg (pairs), one pair for each field
  *
  * NOTE: Users normally won't want to call this function directly, but
  * rather use the kprobe_event_gen_cmd_start() wrapper, which automatically
@@ -1018,7 +1018,7 @@ EXPORT_SYMBOL_GPL(__kprobe_event_gen_cmd_start);
 /**
  * __kprobe_event_add_fields - Add probe fields to a kprobe command from arg list
  * @cmd: A pointer to the dynevent_cmd struct representing the new event
- * @args: Variable number of arg (pairs), one pair for each field
+ * @...: Variable number of arg (pairs), one pair for each field
  *
  * NOTE: Users normally won't want to call this function directly, but
  * rather use the kprobe_event_add_fields() wrapper, which
@@ -1887,16 +1887,16 @@ static __init int init_kprobe_trace(void)
 	if (ret)
 		return 0;
 
-	entry = tracefs_create_file("kprobe_events", 0644, NULL,
-				    NULL, &kprobe_events_ops);
+	entry = tracefs_create_file("kprobe_events", TRACE_MODE_WRITE,
+				    NULL, NULL, &kprobe_events_ops);
 
 	/* Event list interface */
 	if (!entry)
 		pr_warn("Could not create tracefs 'kprobe_events' entry\n");
 
 	/* Profile interface */
-	entry = tracefs_create_file("kprobe_profile", 0444, NULL,
-				    NULL, &kprobe_profile_ops);
+	entry = tracefs_create_file("kprobe_profile", TRACE_MODE_READ,
+				    NULL, NULL, &kprobe_profile_ops);
 
 	if (!entry)
 		pr_warn("Could not create tracefs 'kprobe_profile' entry\n");

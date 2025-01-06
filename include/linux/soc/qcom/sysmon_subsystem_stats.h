@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 /*
  * This header is for sysmon subsystem stats query API's in drivers.
@@ -9,6 +10,11 @@
 #define __QCOM_SYSMON_SUBSYSTEM_STATS_H__
 /* Maximum number of clock levels in power stats */
 #define SYSMON_POWER_STATS_MAX_CLK_LEVELS 16
+
+/* Error Codes */
+/* Error code when DSP PMU Counters are unavailable/overridden */
+#define DSP_PMU_COUNTER_NA 0x1
+
 /*
  * @struct sysmon_smem_power_stats
  * @brief Structure type to hold DSP power statistics.
@@ -157,7 +163,7 @@ int sysmon_stats_query_sleep(enum dsp_id_t dsp_id,
  * in the hvx_util parameter.
  * @arg1: u32 pointer to HVX utilization in percentage.
  * @return: SUCCESS (0) if Query is successful
- *        FAILURE (Non-zero) if Query could not be processed.
+ *        FAILURE (Non-zero) if Query could not be processed, refer error codes.
  */
 int sysmon_stats_query_hvx_utlization(u32 *hvx_util);
 
@@ -167,7 +173,7 @@ int sysmon_stats_query_hvx_utlization(u32 *hvx_util);
  * in the hmx_util parameter.
  * @arg1: u32 pointer to HMX utilization in percentage.
  * @return: SUCCESS (0) if Query is successful
- *        FAILURE (Non-zero) if Query could not be processed.
+ *        FAILURE (Non-zero) if Query could not be processed, refer error codes.
  */
 int sysmon_stats_query_hmx_utlization(u32 *hmx_util);
 #endif

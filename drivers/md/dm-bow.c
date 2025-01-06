@@ -611,6 +611,7 @@ static void dm_bow_dtr(struct dm_target *ti)
 		wait_for_completion(dm_get_completion_from_kobject(kobj));
 	}
 
+	mutex_lock(&bc->ranges_lock);
 	while (rb_first(&bc->ranges)) {
 		struct bow_range *br = container_of(rb_first(&bc->ranges),
 					      struct bow_range, node);
@@ -618,6 +619,7 @@ static void dm_bow_dtr(struct dm_target *ti)
 		rb_erase(&br->node, &bc->ranges);
 		kfree(br);
 	}
+	mutex_unlock(&bc->ranges_lock);
 
 	mutex_destroy(&bc->ranges_lock);
 	kfree(bc->log_sector);
@@ -998,10 +1000,10 @@ static int handle_sector0(struct bow_context *bc, struct bio *bio)
 	int ret = DM_MAPIO_REMAPPED;
 
 	if (bio->bi_iter.bi_size > bc->block_size) {
-		struct bio *split = bio_split(bio,
-					      bc->block_size >> SECTOR_SHIFT,
-					      GFP_NOIO,
-					      &fs_bio_set);
+		struct bio * split = bio_split(bio,
+					       bc->block_size >> SECTOR_SHIFT,
+					       GFP_NOIO,
+					       &fs_bio_set);
 		if (!split) {
 			DMERR("Failed to split bio");
 			bio->bi_status = BLK_STS_RESOURCE;
@@ -1191,6 +1193,7 @@ static void dm_bow_tablestatus(struct dm_target *ti, char *result,
 		return;
 	}
 
+	mutex_lock(&bc->ranges_lock);
 	for (i = rb_first(&bc->ranges); i; i = rb_next(i)) {
 		struct bow_range *br = container_of(i, struct bow_range, node);
 
@@ -1198,11 +1201,11 @@ static void dm_bow_tablestatus(struct dm_target *ti, char *result,
 				    readable_type[br->type],
 				    (unsigned long long)br->sector);
 		if (result >= end)
-			return;
+			goto unlock;
 
 		result += scnprintf(result, end - result, "\n");
 		if (result >= end)
-			return;
+			goto unlock;
 
 		if (br->type == TRIMMED)
 			++trimmed_range_count;
@@ -1224,19 +1227,22 @@ static void dm_bow_tablestatus(struct dm_target *ti, char *result,
 		if (!rb_next(i)) {
 			scnprintf(result, end - result,
 				  "\nERROR: Last range not of type TOP");
-			return;
+			goto unlock;
 		}
 
 		if (br->sector > range_top(br)) {
 			scnprintf(result, end - result,
 				  "\nERROR: sectors out of order");
-			return;
+			goto unlock;
 		}
 	}
 
 	if (trimmed_range_count != trimmed_list_length)
 		scnprintf(result, end - result,
 			  "\nERROR: not all trimmed ranges in trimmed list");
+
+unlock:
+	mutex_unlock(&bc->ranges_lock);
 }
 
 static void dm_bow_status(struct dm_target *ti, status_type_t type,

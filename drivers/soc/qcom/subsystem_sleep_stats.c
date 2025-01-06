@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/cdev.h>
@@ -99,12 +99,6 @@ enum subsystem_pid {
 	PID_GPU = PID_APSS,
 	PID_DISPLAY = PID_APSS,
 	PID_OTHERS = -2,
-};
-
-struct stats_config {
-	unsigned int offset_addr;
-	unsigned int ddr_offset_addr;
-	unsigned int num_records;
 };
 
 struct sleep_stats_data {
@@ -228,7 +222,7 @@ bool has_system_slept(void)
 
 	return sleep_flag;
 }
-EXPORT_SYMBOL(has_system_slept);
+EXPORT_SYMBOL_GPL(has_system_slept);
 
 bool has_subsystem_slept(void)
 {
@@ -252,13 +246,13 @@ bool has_subsystem_slept(void)
 
 	return sleep_flag;
 }
-EXPORT_SYMBOL(has_subsystem_slept);
+EXPORT_SYMBOL_GPL(has_subsystem_slept);
 
 void subsystem_sleep_debug_enable(bool enable)
 {
 	subsystem_stats_debug_on = enable;
 }
-EXPORT_SYMBOL(subsystem_sleep_debug_enable);
+EXPORT_SYMBOL_GPL(subsystem_sleep_debug_enable);
 
 static long stats_data_ioctl(struct file *file, unsigned int cmd,
 			     unsigned long arg)
@@ -671,5 +665,5 @@ static struct platform_driver subsystem_sleep_stats_driver = {
 };
 
 module_platform_driver(subsystem_sleep_stats_driver);
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Qualcomm Technologies, Inc. (QTI) subsystem sleep stats driver");

@@ -182,6 +182,14 @@ static inline void clear_highpage(struct page *page)
 	kunmap_atomic(kaddr);
 }
 
+static inline void clear_highpage_kasan_tagged(struct page *page)
+{
+	void *kaddr = kmap_local_page(page);
+
+	clear_page(kasan_reset_tag(kaddr));
+	kunmap_local(kaddr);
+}
+
 #ifndef __HAVE_ARCH_TAG_CLEAR_HIGHPAGE
 
 static inline void tag_clear_highpage(struct page *page)
@@ -245,6 +253,30 @@ static inline void copy_user_highpage(struct page *to, struct page *from,
 	kunmap_atomic(vfrom);
 }
 
+#endif
+
+#ifdef copy_mc_to_kernel
+static inline int copy_mc_user_highpage(struct page *to, struct page *from,
+					unsigned long vaddr, struct vm_area_struct *vma)
+{
+	unsigned long ret;
+	char *vfrom, *vto;
+
+	vfrom = kmap_local_page(from);
+	vto = kmap_local_page(to);
+	ret = copy_mc_to_kernel(vto, vfrom, PAGE_SIZE);
+	kunmap_local(vto);
+	kunmap_local(vfrom);
+
+	return ret;
+}
+#else
+static inline int copy_mc_user_highpage(struct page *to, struct page *from,
+					unsigned long vaddr, struct vm_area_struct *vma)
+{
+	copy_user_highpage(to, from, vaddr, vma);
+	return 0;
+}
 #endif
 
 #ifndef __HAVE_ARCH_COPY_HIGHPAGE

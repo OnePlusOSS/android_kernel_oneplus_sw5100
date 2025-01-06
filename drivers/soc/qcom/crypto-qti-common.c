@@ -180,7 +180,7 @@ int crypto_qti_init_crypto(void *mmio_data)
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_init_crypto);
+EXPORT_SYMBOL_GPL(crypto_qti_init_crypto);
 
 static void ice_low_power_and_optimization_enable(void __iomem *ice_mmio)
 {
@@ -234,13 +234,13 @@ int crypto_qti_enable(void *mmio_data)
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_enable);
+EXPORT_SYMBOL_GPL(crypto_qti_enable);
 
 void crypto_qti_disable(void)
 {
 	crypto_qti_disable_platform();
 }
-EXPORT_SYMBOL(crypto_qti_disable);
+EXPORT_SYMBOL_GPL(crypto_qti_disable);
 
 int crypto_qti_resume(void *mmio_data)
 {
@@ -248,7 +248,7 @@ int crypto_qti_resume(void *mmio_data)
 
 	return ice_wait_bist_status(ice_mmio);
 }
-EXPORT_SYMBOL(crypto_qti_resume);
+EXPORT_SYMBOL_GPL(crypto_qti_resume);
 
 static void ice_dump_test_bus(void __iomem *ice_mmio)
 {
@@ -399,7 +399,7 @@ int crypto_qti_debug(const struct ice_mmio_data *mmio_data)
 
 	return 0;
 }
-EXPORT_SYMBOL(crypto_qti_debug);
+EXPORT_SYMBOL_GPL(crypto_qti_debug);
 
 int crypto_qti_keyslot_program(const struct ice_mmio_data *mmio_data,
 			       const struct blk_crypto_key *key,
@@ -421,7 +421,7 @@ int crypto_qti_keyslot_program(const struct ice_mmio_data *mmio_data,
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_keyslot_program);
+EXPORT_SYMBOL_GPL(crypto_qti_keyslot_program);
 
 int crypto_qti_keyslot_evict(const struct ice_mmio_data *mmio_data,
 							 unsigned int slot)
@@ -436,7 +436,7 @@ int crypto_qti_keyslot_evict(const struct ice_mmio_data *mmio_data,
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_keyslot_evict);
+EXPORT_SYMBOL_GPL(crypto_qti_keyslot_evict);
 
 int crypto_qti_derive_raw_secret(const u8 *wrapped_key,
 				 unsigned int wrapped_key_size, u8 *secret,
@@ -464,7 +464,7 @@ int crypto_qti_derive_raw_secret(const u8 *wrapped_key,
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_derive_raw_secret);
+EXPORT_SYMBOL_GPL(crypto_qti_derive_raw_secret);
 
 #if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
 static struct ice_part_cfg *crypto_qti_ice_get_part_cfg(struct ice_device *ice_dev,
@@ -809,7 +809,7 @@ unsigned int crypto_qti_ice_get_num_fde_slots(void)
 	else
 		return 0;
 }
-EXPORT_SYMBOL(crypto_qti_ice_get_num_fde_slots);
+EXPORT_SYMBOL_GPL(crypto_qti_ice_get_num_fde_slots);
 
 static int crypto_qti_ice_get_vreg(struct ice_device *ice_dev)
 {
@@ -1176,7 +1176,7 @@ int crypto_qti_ice_config_start(struct request *req, struct ice_data_setting *se
 out:
 	return ret;
 }
-EXPORT_SYMBOL(crypto_qti_ice_config_start);
+EXPORT_SYMBOL_GPL(crypto_qti_ice_config_start);
 
 static int crypto_qti_ice_enable_clocks(struct ice_device *ice, bool enable)
 {
@@ -1472,7 +1472,7 @@ err_ice_dev:
 out:
 	return rc;
 }
-EXPORT_SYMBOL(crypto_qti_ice_init_fde_node);
+EXPORT_SYMBOL_GPL(crypto_qti_ice_init_fde_node);
 
 int crypto_qti_ice_setup_ice_hw(const char *storage_type, int enable)
 {
@@ -1490,7 +1490,7 @@ int crypto_qti_ice_setup_ice_hw(const char *storage_type, int enable)
 	else
 		return crypto_qti_ice_disable_setup(ice_dev);
 }
-EXPORT_SYMBOL(crypto_qti_ice_setup_ice_hw);
+EXPORT_SYMBOL_GPL(crypto_qti_ice_setup_ice_hw);
 
 #else /* dumy ufsice driver */
 

@@ -678,10 +678,14 @@ static const struct file_operations objects_fops = {
 	.release = seq_release,
 };
 
-static int __init kfence_debugfs_init(void)
+static int kfence_debugfs_init(void)
 {
-	struct dentry *kfence_dir = debugfs_create_dir("kfence", NULL);
+	struct dentry *kfence_dir;
 
+	if (!READ_ONCE(kfence_enabled))
+		return 0;
+
+	kfence_dir = debugfs_create_dir("kfence", NULL);
 	debugfs_create_file("stats", 0444, kfence_dir, NULL, &stats_fops);
 	debugfs_create_file("objects", 0400, kfence_dir, NULL, &objects_fops);
 	return 0;
@@ -748,6 +752,10 @@ static DECLARE_DELAYED_WORK(kfence_timer, toggle_allocation_gate);
 void __init kfence_alloc_pool(void)
 {
 	if (!kfence_sample_interval)
+		return;
+
+	/* if the pool has already been initialized by arch, skip the below. */
+	if (__kfence_pool)
 		return;
 
 	__kfence_pool = memblock_alloc(KFENCE_POOL_SIZE, PAGE_SIZE);

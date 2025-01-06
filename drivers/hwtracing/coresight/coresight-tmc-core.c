@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (c) 2012, 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2012 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Description: CoreSight Trace Memory Controller driver
  */
@@ -683,16 +683,10 @@ static int tmc_probe(struct amba_device *adev, const struct amba_id *id)
 		if (ret)
 			goto out;
 
-		ret = tmc_etr_eth_init(adev, drvdata);
-		if (ret)
-			goto out;
-
 		if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_MEM))
 			drvdata->out_mode = TMC_ETR_OUT_MODE_MEM;
 		else if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_USB))
 			drvdata->out_mode = TMC_ETR_OUT_MODE_USB;
-		else if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_ETH))
-			drvdata->out_mode = TMC_ETR_OUT_MODE_ETH;
 		else
 			drvdata->out_mode = TMC_ETR_OUT_MODE_NONE;
 
@@ -757,7 +751,7 @@ static void tmc_shutdown(struct amba_device *adev)
 		(drvdata->out_mode == TMC_ETR_OUT_MODE_MEM ||
 		 (drvdata->out_mode == TMC_ETR_OUT_MODE_USB &&
 		  drvdata->usb_data->usb_mode == TMC_ETR_USB_SW)))
-		tmc_etr_disable_hw(drvdata);
+		tmc_etr_disable_hw(drvdata, true);
 
 	/*
 	 * We do not care about coresight unregister here unlike remove

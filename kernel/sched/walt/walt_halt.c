@@ -331,9 +331,8 @@ static int start_cpus(struct cpumask *cpus)
 	for_each_cpu(cpu, cpus) {
 		halt_cpu_state = per_cpu_ptr(&halt_state, cpu);
 		halt_cpu_state->last_halt = 0;
-		wmb();
-
 		/* wmb to guarantee zero'd last_halt before clearing from the mask */
+		wmb();
 
 		cpumask_clear_cpu(cpu, cpu_halt_mask);
 
@@ -414,7 +413,7 @@ int walt_pause_cpus(struct cpumask *cpus, enum pause_reason reason)
 		return -EAGAIN;
 	return walt_halt_cpus(cpus, reason);
 }
-EXPORT_SYMBOL(walt_pause_cpus);
+EXPORT_SYMBOL_GPL(walt_pause_cpus);
 
 /* cpus will be modified */
 int walt_start_cpus(struct cpumask *cpus, enum pause_reason reason)
@@ -450,7 +449,7 @@ int walt_resume_cpus(struct cpumask *cpus, enum pause_reason reason)
 		return -EAGAIN;
 	return walt_start_cpus(cpus, reason);
 }
-EXPORT_SYMBOL(walt_resume_cpus);
+EXPORT_SYMBOL_GPL(walt_resume_cpus);
 
 static void android_rvh_get_nohz_timer_target(void *unused, int *cpu, bool *done)
 {

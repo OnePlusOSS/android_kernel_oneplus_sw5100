@@ -144,7 +144,7 @@ bool iwl_is_ht40_tx_allowed(struct iwl_priv *priv,
 	if (!sta)
 		return true;
 
-	return sta->bandwidth >= IEEE80211_STA_RX_BW_40;
+	return sta->deflink.bandwidth >= IEEE80211_STA_RX_BW_40;
 }
 
 static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
@@ -152,7 +152,7 @@ static void iwl_sta_calc_ht_flags(struct iwl_priv *priv,
 				  struct iwl_rxon_context *ctx,
 				  __le32 *flags, __le32 *mask)
 {
-	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->ht_cap;
+	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->deflink.ht_cap;
 
 	*mask = STA_FLG_RTS_MIMO_PROT_MSK |
 		STA_FLG_MIMO_DIS_MSK |
@@ -1086,6 +1086,7 @@ static int iwlagn_send_sta_key(struct iwl_priv *priv,
 {
 	__le16 key_flags;
 	struct iwl_addsta_cmd sta_cmd;
+	size_t to_copy;
 	int i;
 
 	spin_lock_bh(&priv->sta_lock);
@@ -1105,7 +1106,9 @@ static int iwlagn_send_sta_key(struct iwl_priv *priv,
 		sta_cmd.key.tkip_rx_tsc_byte2 = tkip_iv32;
 		for (i = 0; i < 5; i++)
 			sta_cmd.key.tkip_rx_ttak[i] = cpu_to_le16(tkip_p1k[i]);
-		memcpy(sta_cmd.key.key, keyconf->key, keyconf->keylen);
+		/* keyconf may contain MIC rx/tx keys which iwl does not use */
+		to_copy = min_t(size_t, sizeof(sta_cmd.key.key), keyconf->keylen);
+		memcpy(sta_cmd.key.key, keyconf->key, to_copy);
 		break;
 	case WLAN_CIPHER_SUITE_WEP104:
 		key_flags |= STA_KEY_FLG_KEY_SIZE_MSK;

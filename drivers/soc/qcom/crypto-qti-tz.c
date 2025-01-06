@@ -2,7 +2,7 @@
 /*
  * Crypto TZ library for storage encryption.
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <asm/cacheflush.h>
@@ -67,7 +67,7 @@ int crypto_qti_program_key(const struct ice_mmio_data *mmio_data,
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_program_key);
+EXPORT_SYMBOL_GPL(crypto_qti_program_key);
 
 int crypto_qti_invalidate_key(const struct ice_mmio_data *mmio_data,
 			      unsigned int slot)
@@ -84,7 +84,7 @@ int crypto_qti_invalidate_key(const struct ice_mmio_data *mmio_data,
 
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_invalidate_key);
+EXPORT_SYMBOL_GPL(crypto_qti_invalidate_key);
 
 int crypto_qti_derive_raw_secret_platform(
 				const u8 *wrapped_key,
@@ -123,7 +123,7 @@ int crypto_qti_derive_raw_secret_platform(
 	qtee_shmbridge_free_shm(&shm_secret);
 	return err;
 }
-EXPORT_SYMBOL(crypto_qti_derive_raw_secret_platform);
+EXPORT_SYMBOL_GPL(crypto_qti_derive_raw_secret_platform);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Crypto TZ library for storage encryption");

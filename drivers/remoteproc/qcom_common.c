@@ -35,6 +35,7 @@
 #define GLINK_SUBDEV_NAME	"glink"
 #define SMD_SUBDEV_NAME		"smd"
 #define SSR_SUBDEV_NAME		"ssr"
+#define QMP_MSG_LEN	64
 
 #define MAX_NUM_OF_SS           10
 #define MAX_REGION_NAME_LENGTH  16
@@ -100,7 +101,7 @@ struct qcom_ssr_subsystem {
 
 static struct kobject *sysfs_kobject;
 bool qcom_device_shutdown_in_progress;
-EXPORT_SYMBOL(qcom_device_shutdown_in_progress);
+EXPORT_SYMBOL_GPL(qcom_device_shutdown_in_progress);
 
 static LIST_HEAD(qcom_ssr_subsystem_list);
 static DEFINE_MUTEX(qcom_ssr_subsys_lock);
@@ -287,6 +288,17 @@ static void qcom_rproc_minidump(struct rproc *rproc, struct device *md_dev)
 
 	dev_coredumpv(md_dev, data, data_size, GFP_KERNEL);
 }
+
+int qcom_rproc_toggle_load_state(struct qmp *qmp, const char *name, bool enable)
+{
+	char buf[QMP_MSG_LEN] = {};
+
+	snprintf(buf, sizeof(buf),
+		 "{class: image, res: load_state, name: %s, val: %s}",
+		 name, enable ? "on" : "off");
+	return qmp_send(qmp, buf, sizeof(buf));
+}
+EXPORT_SYMBOL_GPL(qcom_rproc_toggle_load_state);
 
 void qcom_minidump(struct rproc *rproc, struct device *md_dev,
 				unsigned int minidump_id, rproc_dumpfn_t dumpfn)
@@ -580,7 +592,7 @@ out:
 	mutex_unlock(&qcom_ssr_subsys_lock);
 	return info;
 }
-EXPORT_SYMBOL(qcom_ssr_get_subsys);
+EXPORT_SYMBOL_GPL(qcom_ssr_get_subsys);
 
 void *qcom_register_early_ssr_notifier(const char *name, struct notifier_block *nb)
 {
@@ -594,13 +606,13 @@ void *qcom_register_early_ssr_notifier(const char *name, struct notifier_block *
 
 	return &info->early_notifier_list;
 }
-EXPORT_SYMBOL(qcom_register_early_ssr_notifier);
+EXPORT_SYMBOL_GPL(qcom_register_early_ssr_notifier);
 
 int qcom_unregister_early_ssr_notifier(void *notify, struct notifier_block *nb)
 {
 	return srcu_notifier_chain_unregister(notify, nb);
 }
-EXPORT_SYMBOL(qcom_unregister_early_ssr_notifier);
+EXPORT_SYMBOL_GPL(qcom_unregister_early_ssr_notifier);
 
 void qcom_notify_early_ssr_clients(struct rproc_subdev *subdev)
 {
@@ -608,7 +620,7 @@ void qcom_notify_early_ssr_clients(struct rproc_subdev *subdev)
 
 	srcu_notifier_call_chain(&ssr->info->early_notifier_list, QCOM_SSR_BEFORE_SHUTDOWN, NULL);
 }
-EXPORT_SYMBOL(qcom_notify_early_ssr_clients);
+EXPORT_SYMBOL_GPL(qcom_notify_early_ssr_clients);
 
 /**
  * qcom_register_ssr_notifier() - register SSR notification handler
@@ -680,7 +692,7 @@ int qcom_notify_ssr_clients(struct qcom_ssr_subsystem *info, int state,
 
 	return srcu_notifier_call_chain(&info->notifier_list, state, data);
 }
-EXPORT_SYMBOL(qcom_notify_ssr_clients);
+EXPORT_SYMBOL_GPL(qcom_notify_ssr_clients);
 
 static inline void notify_ssr_clients(struct qcom_rproc_ssr *ssr, struct qcom_ssr_notify_data *data)
 {

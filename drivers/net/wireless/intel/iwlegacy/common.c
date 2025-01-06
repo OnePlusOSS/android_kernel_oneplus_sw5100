@@ -1863,7 +1863,7 @@ EXPORT_SYMBOL(il_send_add_sta);
 static void
 il_set_ht_add_station(struct il_priv *il, u8 idx, struct ieee80211_sta *sta)
 {
-	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->ht_cap;
+	struct ieee80211_sta_ht_cap *sta_ht_inf = &sta->deflink.ht_cap;
 	__le32 sta_flags;
 
 	if (!sta || !sta_ht_inf->ht_supported)
@@ -1900,7 +1900,7 @@ il_set_ht_add_station(struct il_priv *il, u8 idx, struct ieee80211_sta *sta)
 	    cpu_to_le32((u32) sta_ht_inf->
 			ampdu_density << STA_FLG_AGG_MPDU_DENSITY_POS);
 
-	if (il_is_ht40_tx_allowed(il, &sta->ht_cap))
+	if (il_is_ht40_tx_allowed(il, &sta->deflink.ht_cap))
 		sta_flags |= STA_FLG_HT40_EN_MSK;
 	else
 		sta_flags &= ~STA_FLG_HT40_EN_MSK;
@@ -5173,7 +5173,7 @@ il_mac_reset_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	memset(&il->current_ht_config, 0, sizeof(struct il_ht_config));
 
 	/* new association get rid of ibss beacon skb */
-	dev_kfree_skb(il->beacon_skb);
+	dev_consume_skb_irq(il->beacon_skb);
 	il->beacon_skb = NULL;
 	il->timestamp = 0;
 
@@ -5222,7 +5222,7 @@ il_ht_conf(struct il_priv *il, struct ieee80211_vif *vif)
 		rcu_read_lock();
 		sta = ieee80211_find_sta(vif, bss_conf->bssid);
 		if (sta) {
-			struct ieee80211_sta_ht_cap *ht_cap = &sta->ht_cap;
+			struct ieee80211_sta_ht_cap *ht_cap = &sta->deflink.ht_cap;
 			int maxstreams;
 
 			maxstreams =
@@ -5292,7 +5292,7 @@ il_beacon_update(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 	}
 
 	spin_lock_irqsave(&il->lock, flags);
-	dev_kfree_skb(il->beacon_skb);
+	dev_consume_skb_irq(il->beacon_skb);
 	il->beacon_skb = skb;
 
 	timestamp = ((struct ieee80211_mgmt *)skb->data)->u.beacon.timestamp;

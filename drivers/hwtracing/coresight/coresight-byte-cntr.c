@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/interrupt.h>
@@ -194,7 +194,7 @@ void tmc_etr_byte_cntr_start(struct byte_cntr *byte_cntr_data)
 	byte_cntr_data->enable = true;
 	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
 }
-EXPORT_SYMBOL(tmc_etr_byte_cntr_start);
+EXPORT_SYMBOL_GPL(tmc_etr_byte_cntr_start);
 
 void tmc_etr_byte_cntr_stop(struct byte_cntr *byte_cntr_data)
 {
@@ -211,7 +211,7 @@ void tmc_etr_byte_cntr_stop(struct byte_cntr *byte_cntr_data)
 	mutex_unlock(&byte_cntr_data->byte_cntr_lock);
 
 }
-EXPORT_SYMBOL(tmc_etr_byte_cntr_stop);
+EXPORT_SYMBOL_GPL(tmc_etr_byte_cntr_stop);
 
 
 static int tmc_etr_byte_cntr_release(struct inode *in, struct file *fp)

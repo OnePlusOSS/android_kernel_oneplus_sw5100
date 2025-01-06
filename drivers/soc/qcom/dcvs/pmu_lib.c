@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "qcom-pmu: " fmt
@@ -123,7 +124,7 @@ static inline u64 cached_count_value(struct event_data *ev, u64 event_cached_cou
 	if (amu)
 		return event_cached_count;
 
-	if (cpu_pmu->pmuver >= ID_AA64DFR0_PMUVER_8_5)
+	if (cpu_pmu->pmuver >= ID_AA64DFR0_EL1_PMUVer_V3P5)
 		event_cached_count |= (pmu_long_counter ? BIT(63) : GENMASK(63, 31));
 	else {
 		if (ev->event_id == CYCLE_COUNTER_ID)
@@ -369,7 +370,7 @@ int qcom_get_cpucp_id(u32 event_id, int cpu)
 
 	return event->cid;
 }
-EXPORT_SYMBOL(qcom_get_cpucp_id);
+EXPORT_SYMBOL_GPL(qcom_get_cpucp_id);
 
 int qcom_pmu_event_supported(u32 event_id, int cpu)
 {
@@ -379,13 +380,13 @@ int qcom_pmu_event_supported(u32 event_id, int cpu)
 
 	return PTR_ERR_OR_ZERO(event);
 }
-EXPORT_SYMBOL(qcom_pmu_event_supported);
+EXPORT_SYMBOL_GPL(qcom_pmu_event_supported);
 
 int qcom_pmu_read(int cpu, u32 event_id, u64 *pmu_data)
 {
 	return __qcom_pmu_read(cpu, event_id, pmu_data, false);
 }
-EXPORT_SYMBOL(qcom_pmu_read);
+EXPORT_SYMBOL_GPL(qcom_pmu_read);
 
 int qcom_pmu_read_local(u32 event_id, u64 *pmu_data)
 {
@@ -393,13 +394,13 @@ int qcom_pmu_read_local(u32 event_id, u64 *pmu_data)
 
 	return __qcom_pmu_read(this_cpu, event_id, pmu_data, true);
 }
-EXPORT_SYMBOL(qcom_pmu_read_local);
+EXPORT_SYMBOL_GPL(qcom_pmu_read_local);
 
 int qcom_pmu_read_all(int cpu, struct qcom_pmu_data *data)
 {
 	return __qcom_pmu_read_all(cpu, data, false);
 }
-EXPORT_SYMBOL(qcom_pmu_read_all);
+EXPORT_SYMBOL_GPL(qcom_pmu_read_all);
 
 int qcom_pmu_read_all_local(struct qcom_pmu_data *data)
 {
@@ -407,7 +408,7 @@ int qcom_pmu_read_all_local(struct qcom_pmu_data *data)
 
 	return __qcom_pmu_read_all(this_cpu, data, true);
 }
-EXPORT_SYMBOL(qcom_pmu_read_all_local);
+EXPORT_SYMBOL_GPL(qcom_pmu_read_all_local);
 
 int qcom_pmu_idle_register(struct qcom_pmu_notif_node *idle_node)
 {
@@ -425,7 +426,7 @@ out:
 	spin_unlock(&idle_list_lock);
 	return 0;
 }
-EXPORT_SYMBOL(qcom_pmu_idle_register);
+EXPORT_SYMBOL_GPL(qcom_pmu_idle_register);
 
 int qcom_pmu_idle_unregister(struct qcom_pmu_notif_node *idle_node)
 {
@@ -446,7 +447,7 @@ int qcom_pmu_idle_unregister(struct qcom_pmu_notif_node *idle_node)
 	spin_unlock(&idle_list_lock);
 	return ret;
 }
-EXPORT_SYMBOL(qcom_pmu_idle_unregister);
+EXPORT_SYMBOL_GPL(qcom_pmu_idle_unregister);
 
 static int events_caching_enable(void)
 {
@@ -903,7 +904,7 @@ int rimps_pmu_init(struct scmi_device *sdev)
 
 	return ret;
 }
-EXPORT_SYMBOL(rimps_pmu_init);
+EXPORT_SYMBOL_GPL(rimps_pmu_init);
 
 static int configure_pmu_event(u32 event_id, int amu_id, int cid, int cpu)
 {

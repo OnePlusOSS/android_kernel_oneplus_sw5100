@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved. */
-/* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved. */
+/* Copyright (c) 2012-2015, 2017, 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ */
 
 #include <linux/bitmap.h>
 #include <linux/debugfs.h>
@@ -1488,7 +1489,7 @@ int spmi_pmic_arb_map_address(const struct device *dev, u32 spmi_address,
 
 	return _spmi_pmic_arb_map_address(pmic_arb, spmi_address, res_out);
 }
-EXPORT_SYMBOL(spmi_pmic_arb_map_address);
+EXPORT_SYMBOL_GPL(spmi_pmic_arb_map_address);
 
 #ifdef CONFIG_DEBUG_FS
 static int debug_spmi_addr_get(void *data, u64 *val)

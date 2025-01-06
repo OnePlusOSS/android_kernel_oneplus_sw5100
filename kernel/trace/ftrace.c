@@ -988,8 +988,9 @@ static __init void ftrace_profile_tracefs(struct dentry *d_tracer)
 		}
 	}
 
-	entry = tracefs_create_file("function_profile_enabled", 0644,
-				    d_tracer, NULL, &ftrace_profile_fops);
+	entry = tracefs_create_file("function_profile_enabled",
+				    TRACE_MODE_WRITE, d_tracer, NULL,
+				    &ftrace_profile_fops);
 	if (!entry)
 		pr_warn("Could not create tracefs 'function_profile_enabled' entry\n");
 }
@@ -1537,7 +1538,8 @@ static struct dyn_ftrace *lookup_rec(unsigned long start, unsigned long end)
 	key.flags = end;	/* overload flags, as it is unsigned long */
 
 	for (pg = ftrace_pages_start; pg; pg = pg->next) {
-		if (end < pg->records[0].ip ||
+		if (pg->index == 0 ||
+		    end < pg->records[0].ip ||
 		    start >= (pg->records[pg->index - 1].ip + MCOUNT_INSN_SIZE))
 			continue;
 		rec = bsearch(&key, pg->records, pg->index,
@@ -3190,6 +3192,22 @@ static int ftrace_allocate_records(struct ftrace_page *pg, int count)
 	return cnt;
 }
 
+static void ftrace_free_pages(struct ftrace_page *pages)
+{
+	struct ftrace_page *pg = pages;
+
+	while (pg) {
+		if (pg->records) {
+			free_pages((unsigned long)pg->records, pg->order);
+			ftrace_number_of_pages -= 1 << pg->order;
+		}
+		pages = pg->next;
+		kfree(pg);
+		pg = pages;
+		ftrace_number_of_groups--;
+	}
+}
+
 static struct ftrace_page *
 ftrace_allocate_pages(unsigned long num_to_init)
 {
@@ -3228,17 +3246,7 @@ ftrace_allocate_pages(unsigned long num_to_init)
 	return start_pg;
 
  free_pages:
-	pg = start_pg;
-	while (pg) {
-		if (pg->records) {
-			free_pages((unsigned long)pg->records, pg->order);
-			ftrace_number_of_pages -= 1 << pg->order;
-		}
-		start_pg = pg->next;
-		kfree(pg);
-		pg = start_pg;
-		ftrace_number_of_groups--;
-	}
+	ftrace_free_pages(start_pg);
 	pr_info("ftrace: FAILED to allocate memory for functions\n");
 	return NULL;
 }
@@ -5381,12 +5389,15 @@ int modify_ftrace_direct(unsigned long ip,
 		ret = 0;
 	}
 
-	if (unlikely(ret && new_direct)) {
-		direct->count++;
-		list_del_rcu(&new_direct->next);
-		synchronize_rcu_tasks();
-		kfree(new_direct);
-		ftrace_direct_func_count--;
+	if (ret) {
+		direct->addr = old_addr;
+		if (unlikely(new_direct)) {
+			direct->count++;
+			list_del_rcu(&new_direct->next);
+			synchronize_rcu_tasks();
+			kfree(new_direct);
+			ftrace_direct_func_count--;
+		}
 	}
 
  out_unlock:
@@ -6113,10 +6124,10 @@ void ftrace_create_filter_files(struct ftrace_ops *ops,
 				struct dentry *parent)
 {
 
-	trace_create_file("set_ftrace_filter", 0644, parent,
+	trace_create_file("set_ftrace_filter", TRACE_MODE_WRITE, parent,
 			  ops, &ftrace_filter_fops);
 
-	trace_create_file("set_ftrace_notrace", 0644, parent,
+	trace_create_file("set_ftrace_notrace", TRACE_MODE_WRITE, parent,
 			  ops, &ftrace_notrace_fops);
 }
 
@@ -6143,19 +6154,19 @@ void ftrace_destroy_filter_files(struct ftrace_ops *ops)
 static __init int ftrace_init_dyn_tracefs(struct dentry *d_tracer)
 {
 
-	trace_create_file("available_filter_functions", 0444,
+	trace_create_file("available_filter_functions", TRACE_MODE_READ,
 			d_tracer, NULL, &ftrace_avail_fops);
 
-	trace_create_file("enabled_functions", 0444,
+	trace_create_file("enabled_functions", TRACE_MODE_READ,
 			d_tracer, NULL, &ftrace_enabled_fops);
 
 	ftrace_create_filter_files(&global_ops, d_tracer);
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	trace_create_file("set_graph_function", 0644, d_tracer,
+	trace_create_file("set_graph_function", TRACE_MODE_WRITE, d_tracer,
 				    NULL,
 				    &ftrace_graph_fops);
-	trace_create_file("set_graph_notrace", 0644, d_tracer,
+	trace_create_file("set_graph_notrace", TRACE_MODE_WRITE, d_tracer,
 				    NULL,
 				    &ftrace_graph_notrace_fops);
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */
@@ -6179,9 +6190,11 @@ static int ftrace_process_locs(struct module *mod,
 			       unsigned long *start,
 			       unsigned long *end)
 {
+	struct ftrace_page *pg_unuse = NULL;
 	struct ftrace_page *start_pg;
 	struct ftrace_page *pg;
 	struct dyn_ftrace *rec;
+	unsigned long skipped = 0;
 	unsigned long count;
 	unsigned long *p;
 	unsigned long addr;
@@ -6235,8 +6248,10 @@ static int ftrace_process_locs(struct module *mod,
 		 * object files to satisfy alignments.
 		 * Skip any NULL pointers.
 		 */
-		if (!addr)
+		if (!addr) {
+			skipped++;
 			continue;
+		}
 
 		end_offset = (pg->index+1) * sizeof(pg->records[0]);
 		if (end_offset > PAGE_SIZE << pg->order) {
@@ -6250,8 +6265,10 @@ static int ftrace_process_locs(struct module *mod,
 		rec->ip = addr;
 	}
 
-	/* We should have used all pages */
-	WARN_ON(pg->next);
+	if (pg->next) {
+		pg_unuse = pg->next;
+		pg->next = NULL;
+	}
 
 	/* Assign the last page to ftrace_pages */
 	ftrace_pages = pg;
@@ -6273,6 +6290,11 @@ static int ftrace_process_locs(struct module *mod,
  out:
 	mutex_unlock(&ftrace_lock);
 
+	/* We should have used all pages unless we skipped some */
+	if (pg_unuse) {
+		WARN_ON(!skipped);
+		ftrace_free_pages(pg_unuse);
+	}
 	return ret;
 }
 
@@ -7498,10 +7520,10 @@ static const struct file_operations ftrace_no_pid_fops = {
 
 void ftrace_init_tracefs(struct trace_array *tr, struct dentry *d_tracer)
 {
-	trace_create_file("set_ftrace_pid", 0644, d_tracer,
+	trace_create_file("set_ftrace_pid", TRACE_MODE_WRITE, d_tracer,
 			    tr, &ftrace_pid_fops);
-	trace_create_file("set_ftrace_notrace_pid", 0644, d_tracer,
-			    tr, &ftrace_no_pid_fops);
+	trace_create_file("set_ftrace_notrace_pid", TRACE_MODE_WRITE,
+			  d_tracer, tr, &ftrace_no_pid_fops);
 }
 
 void __init ftrace_init_tracefs_toplevel(struct trace_array *tr,

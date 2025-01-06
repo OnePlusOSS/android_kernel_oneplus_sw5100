@@ -15,6 +15,7 @@ config MFD_CS5535
 	tristate "AMD CS5535 and CS5536 southbridge core functions"
 	select MFD_CORE
 	depends on PCI && (X86_32 || (X86 && COMPILE_TEST))
+	depends on !UML
 	help
 	  This is the core driver for CS5535/CS5536 MFD functions.  This is
 	  necessary for using the board's GPIO and MFGPT functionality.
@@ -1055,17 +1056,6 @@ config MFD_PM8XXX
 
 	  Say M here if you want to include support for PM8xxx chips as a
 	  module. This will build a module called "pm8xxx-core".
-
-config MFD_I2C_PMIC
-	tristate "QTI I2C PMIC support"
-	depends on I2C && OF
-	select IRQ_DOMAIN
-	select REGMAP_I2C
-	help
-	  This enables support for controlling Qualcomm Technologies, Inc.
-	  PMICs over I2C. The driver controls interrupts, and provides register
-	  access for all of the device's peripherals.  Some QTI PMIC chips
-	  support communication over both I2C and SPMI.
 
 config MFD_QCOM_RPM
 	tristate "Qualcomm Resource Power Manager (RPM)"

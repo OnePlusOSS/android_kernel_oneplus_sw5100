@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2019-2020 Linaro Ltd.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -73,7 +74,7 @@ bool qcom_pil_timeouts_disabled(void)
 out:
 	return timeouts_disabled;
 }
-EXPORT_SYMBOL(qcom_pil_timeouts_disabled);
+EXPORT_SYMBOL_GPL(qcom_pil_timeouts_disabled);
 
 static int qcom_pil_info_init(void)
 {

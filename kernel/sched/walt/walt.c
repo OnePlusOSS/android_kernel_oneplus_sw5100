@@ -123,7 +123,7 @@ int set_task_boost(int boost, u64 period)
 	}
 	return 0;
 }
-EXPORT_SYMBOL(set_task_boost);
+EXPORT_SYMBOL_GPL(set_task_boost);
 
 static inline void acquire_rq_locks_irqsave(const cpumask_t *cpus,
 				     unsigned long *flags)
@@ -597,8 +597,7 @@ static inline u64 freq_policy_load(struct rq *rq, unsigned int *reason)
 	if (sched_freq_aggr_en) {
 		load = wrq->prev_runnable_sum + aggr_grp_load;
 		*reason = CPUFREQ_REASON_FREQ_AGR;
-	}
-	else
+	} else
 		load = wrq->prev_runnable_sum +
 					wrq->grp_time.prev_runnable_sum;
 
@@ -4129,6 +4128,7 @@ static inline void irq_work_restrict_to_mig_clusters(cpumask_t *lock_cpus)
 
 	for_each_sched_cluster(cluster) {
 		bool keep_locked = false;
+
 		for_each_cpu(cpu, &cluster->cpus) {
 			rq = cpu_rq(cpu);
 			wrq = (struct walt_rq *)rq->android_vendor_data1;

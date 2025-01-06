@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 VERSION = 5
 PATCHLEVEL = 15
-SUBLEVEL = 94
+SUBLEVEL = 144
 EXTRAVERSION =
 NAME = Trick or Treat
 
@@ -93,10 +93,17 @@ endif
 
 # If the user is running make -s (silent mode), suppress echoing of
 # commands
+# make-4.0 (and later) keep single letter options in the 1st word of MAKEFLAGS.
 
-ifneq ($(findstring s,$(filter-out --%,$(MAKEFLAGS))),)
-  quiet=silent_
-  KBUILD_VERBOSE = 0
+ifeq ($(filter 3.%,$(MAKE_VERSION)),)
+silence:=$(findstring s,$(firstword -$(MAKEFLAGS)))
+else
+silence:=$(findstring s,$(filter-out --%,$(MAKEFLAGS)))
+endif
+
+ifeq ($(silence),s)
+quiet=silent_
+KBUILD_VERBOSE = 0
 endif
 
 export quiet Q KBUILD_VERBOSE
@@ -147,7 +154,12 @@ $(if $(filter-out $(words $(required_mixed_files)), \
 	$(error KBUILD_MIXED_TREE=$(KBUILD_MIXED_TREE) doesn't contain $(required_mixed_files)))
 endif
 
+mixed-build-prefix = $(if $(KBUILD_MIXED_TREE),$(KBUILD_MIXED_TREE)/)
 export KBUILD_MIXED_TREE
+# This is a hack for kleaf to set mixed-build-prefix within the execution of a make rule, e.g.
+# within __modinst_pre.
+# TODO(b/205893923): Revert this hack once it is properly handled.
+export mixed-build-prefix
 
 # Kbuild will save output files in the current working directory.
 # This does not need to match to the root of the kernel source tree.
@@ -428,15 +440,6 @@ endif
 
 KCONFIG_CONFIG	?= .config
 export KCONFIG_CONFIG
-
-# Default file for 'make defconfig'. This may be overridden by arch-Makefile.
-export KBUILD_DEFCONFIG := defconfig
-
-mixed-build-prefix = $(if $(KBUILD_MIXED_TREE),$(KBUILD_MIXED_TREE)/)
-# This is a hack for kleaf to set mixed-build-prefix within the execution of a make rule, e.g.
-# within __modinst_pre.
-# TODO(b/205893923): Revert this hack once it is properly handled.
-export mixed-build-prefix
 
 # SHELL used by kbuild
 CONFIG_SHELL := sh
@@ -970,8 +973,10 @@ LDFLAGS_vmlinux += --gc-sections
 endif
 
 ifdef CONFIG_SHADOW_CALL_STACK
+ifndef CONFIG_DYNAMIC_SCS
 CC_FLAGS_SCS	:= -fsanitize=shadow-call-stack
 KBUILD_CFLAGS	+= $(CC_FLAGS_SCS)
+endif
 export CC_FLAGS_SCS
 endif
 
@@ -1885,7 +1890,9 @@ quiet_cmd_depmod = DEPMOD  $(MODLIB)
 
 modules_install:
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modinst
+ifndef modules_sign_only
 	$(call cmd,depmod)
+endif
 
 else # CONFIG_MODULES
 
@@ -1899,6 +1906,8 @@ modules modules_install:
 	@echo >&2 '*** to enable CONFIG_MODULES.'
 	@echo >&2 '***'
 	@exit 1
+
+KBUILD_MODULES :=
 
 endif # CONFIG_MODULES
 
@@ -1926,18 +1935,12 @@ $(single-ko): single_modpost
 $(single-no-ko): descend
 	@:
 
-ifeq ($(KBUILD_EXTMOD),)
-# For the single build of in-tree modules, use a temporary file to avoid
-# the situation of modules_install installing an invalid modules.order.
-MODORDER := .modules.tmp
-endif
-
+# Remove MODORDER when done because it is not the real one.
 PHONY += single_modpost
 single_modpost: $(single-no-ko) modules_prepare
 	$(Q){ $(foreach m, $(single-ko), echo $(extmod_prefix)$m;) } > $(MODORDER)
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-
-KBUILD_MODULES := 1
+	$(Q)rm -f $(MODORDER)
 
 export KBUILD_SINGLE_TARGETS := $(addprefix $(extmod_prefix), $(single-no-ko))
 
@@ -1945,10 +1948,8 @@ export KBUILD_SINGLE_TARGETS := $(addprefix $(extmod_prefix), $(single-no-ko))
 build-dirs := $(foreach d, $(build-dirs), \
 			$(if $(filter $(d)/%, $(KBUILD_SINGLE_TARGETS)), $(d)))
 
-endif
+KBUILD_MODULES := 1
 
-ifndef CONFIG_MODULES
-KBUILD_MODULES :=
 endif
 
 # Handle descending into subdirectories listed in $(build-dirs)
@@ -2011,7 +2012,7 @@ quiet_cmd_gen_compile_commands = GEN     $@
       cmd_gen_compile_commands = $(PYTHON3) $< -a $(AR) -o $@ $(filter-out $<, $(real-prereqs))
 
 $(extmod_prefix)compile_commands.json: scripts/clang-tools/gen_compile_commands.py \
-	$(if $(KBUILD_EXTMOD)$(KBUILD_MIXED_TREE),,$(KBUILD_VMLINUX_OBJS) $(KBUILD_VMLINUX_LIBS)) \
+	$(if $(KBUILD_EXTMOD),,$(KBUILD_VMLINUX_OBJS) $(KBUILD_VMLINUX_LIBS)) \
 	$(if $(CONFIG_MODULES), $(MODORDER)) FORCE
 	$(call if_changed,gen_compile_commands)
 

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef SLATECOM_INTERFACE_H
 #define SLATECOM_INTERFACE_H
@@ -66,6 +66,11 @@ int get_slate_boot_mode(void);
 bool is_slate_unload_only(void);
 
 /*
+ * update s2a gpio status
+ */
+void update_s2a_status(bool s2a_status_value);
+
+/*
  * Message header type - generic header structure
  */
 struct msg_header_t {
@@ -109,8 +114,8 @@ enum WMSlateCtrlChnlOpcode {
 	GMI_MGR_SSR_ADSP_DOWN_INDICATION = 8,
 
 	/*
-	 * Notification to slate about Modem Processor
-	 * Sub System being brought up after a subsystem reset.
+	 * Notification to slate about ADSP Sub System
+	 * being brought up after a subsystem reset.
 	 */
 	GMI_MGR_SSR_ADSP_UP_INDICATION = 9,
 
@@ -159,10 +164,34 @@ enum WMSlateCtrlChnlOpcode {
 	GMI_WLAN_5G_DISCONNECT  = 19,
 
 	/*
-	* Get slate firmware info.
-	* Slate will return wear_firmware_info_t piggy-backing with the response code.
-	*/
+	 * Get slate firmware info.
+	 * Slate will return wear_firmware_info_t piggy-backing with the response code.
+	 */
 	GMI_WEAR_MGR_GET_FIRMWARE_DETAILS = 20,
+
+	/*
+	 * Pre notification to slate about Modem Processor Sub System
+	 * is down due to a subsystem reset.
+	 */
+	GMI_MGR_SSR_MPSS_DOWN_PRE_NOTIFICATION = 21,
+
+	/*
+	 * Pre notification to slate about Modem Processor Sub System
+	 * being brought up after a subsystem reset.
+	 */
+	GMI_MGR_SSR_MPSS_UP_PRE_NOTIFICATION = 22,
+
+	/*
+	 * Pre notification to slate about ADSP Sub System
+	 * is down due to a subsystem reset.
+	 */
+	GMI_MGR_SSR_ADSP_DOWN_PRE_INDICATION = 23,
+
+	/*
+	 * Pre notification to slate about ADSP Sub System
+	 * being brought up after a subsystem reset.
+	 */
+	GMI_MGR_SSR_ADSP_UP_PRE_INDICATION = 24,
 
 	/*
 	 * DEBUG Opcodes
@@ -174,6 +203,8 @@ enum WMSlateCtrlChnlOpcode {
 	GMI_MGR_ENABLE_PMIC_RTC = 93,		/* Enable PMIC RTC */
 
 	GMI_MGR_DISABLE_PMIC_RTC = 94,		/* Disable PMIC RTC */
+
+	GMI_MGR_FORCE_CRASH = 95,		/* Force Crash of AON */
 };
 
 /*

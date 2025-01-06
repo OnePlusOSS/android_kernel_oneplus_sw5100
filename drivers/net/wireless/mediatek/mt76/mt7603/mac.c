@@ -325,19 +325,21 @@ void mt7603_wtbl_update_cap(struct mt7603_dev *dev, struct ieee80211_sta *sta)
 
 	addr = mt7603_wtbl1_addr(idx);
 
-	ampdu_density = sta->ht_cap.ampdu_density;
+	ampdu_density = sta->deflink.ht_cap.ampdu_density;
 	if (ampdu_density < IEEE80211_HT_MPDU_DENSITY_4)
 		ampdu_density = IEEE80211_HT_MPDU_DENSITY_4;
 
 	val = mt76_rr(dev, addr + 2 * 4);
 	val &= MT_WTBL1_W2_KEY_TYPE | MT_WTBL1_W2_ADMISSION_CONTROL;
-	val |= FIELD_PREP(MT_WTBL1_W2_AMPDU_FACTOR, sta->ht_cap.ampdu_factor) |
-	       FIELD_PREP(MT_WTBL1_W2_MPDU_DENSITY, sta->ht_cap.ampdu_density) |
+	val |= FIELD_PREP(MT_WTBL1_W2_AMPDU_FACTOR,
+			  sta->deflink.ht_cap.ampdu_factor) |
+	       FIELD_PREP(MT_WTBL1_W2_MPDU_DENSITY,
+			  sta->deflink.ht_cap.ampdu_density) |
 	       MT_WTBL1_W2_TXS_BAF_REPORT;
 
-	if (sta->ht_cap.cap)
+	if (sta->deflink.ht_cap.cap)
 		val |= MT_WTBL1_W2_HT;
-	if (sta->vht_cap.cap)
+	if (sta->deflink.vht_cap.cap)
 		val |= MT_WTBL1_W2_VHT;
 
 	mt76_wr(dev, addr + 2 * 4, val);
@@ -346,9 +348,9 @@ void mt7603_wtbl_update_cap(struct mt7603_dev *dev, struct ieee80211_sta *sta)
 	val = mt76_rr(dev, addr + 9 * 4);
 	val &= ~(MT_WTBL2_W9_SHORT_GI_20 | MT_WTBL2_W9_SHORT_GI_40 |
 		 MT_WTBL2_W9_SHORT_GI_80);
-	if (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_20)
+	if (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_20)
 		val |= MT_WTBL2_W9_SHORT_GI_20;
-	if (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_40)
+	if (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_40)
 		val |= MT_WTBL2_W9_SHORT_GI_40;
 	mt76_wr(dev, addr + 9 * 4, val);
 }
@@ -1284,8 +1286,11 @@ void mt7603_mac_add_txs(struct mt7603_dev *dev, void *data)
 	if (wcidx >= MT7603_WTBL_STA || !sta)
 		goto out;
 
-	if (mt7603_fill_txs(dev, msta, &info, txs_data))
+	if (mt7603_fill_txs(dev, msta, &info, txs_data)) {
+		spin_lock_bh(&dev->mt76.rx_lock);
 		ieee80211_tx_status_noskb(mt76_hw(dev), sta, &info);
+		spin_unlock_bh(&dev->mt76.rx_lock);
+	}
 
 out:
 	rcu_read_unlock();
@@ -1558,20 +1563,29 @@ static bool mt7603_rx_pse_busy(struct mt7603_dev *dev)
 {
 	u32 addr, val;
 
-	if (mt76_rr(dev, MT_MCU_DEBUG_RESET) & MT_MCU_DEBUG_RESET_QUEUES)
-		return true;
-
 	if (mt7603_rx_fifo_busy(dev))
-		return false;
+		goto out;
 
 	addr = mt7603_reg_map(dev, MT_CLIENT_BASE_PHYS_ADDR + MT_CLIENT_STATUS);
 	mt76_wr(dev, addr, 3);
 	val = mt76_rr(dev, addr) >> 16;
 
-	if (is_mt7628(dev) && (val & 0x4001) == 0x4001)
-		return true;
+	if (!(val & BIT(0)))
+		return false;
 
-	return (val & 0x8001) == 0x8001 || (val & 0xe001) == 0xe001;
+	if (is_mt7628(dev))
+		val &= 0xa000;
+	else
+		val &= 0x8000;
+	if (!val)
+		return false;
+
+out:
+	if (mt76_rr(dev, MT_INT_SOURCE_CSR) &
+	    (MT_INT_RX_DONE(0) | MT_INT_RX_DONE(1)))
+		return false;
+
+	return true;
 }
 
 static bool

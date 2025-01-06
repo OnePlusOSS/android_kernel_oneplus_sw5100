@@ -412,9 +412,9 @@ void mt76x02_mac_write_txwi(struct mt76x02_dev *dev, struct mt76x02_txwi *txwi,
 		txwi->ack_ctl |= MT_TXWI_ACK_CTL_NSEQ;
 	if ((info->flags & IEEE80211_TX_CTL_AMPDU) && sta) {
 		u8 ba_size = IEEE80211_MIN_AMPDU_BUF;
-		u8 ampdu_density = sta->ht_cap.ampdu_density;
+		u8 ampdu_density = sta->deflink.ht_cap.ampdu_density;
 
-		ba_size <<= sta->ht_cap.ampdu_factor;
+		ba_size <<= sta->deflink.ht_cap.ampdu_factor;
 		ba_size = min_t(int, 63, ba_size - 1);
 		if (info->flags & IEEE80211_TX_CTL_RATE_CTRL_PROBE)
 			ba_size = 0;
@@ -631,8 +631,11 @@ void mt76x02_send_tx_status(struct mt76x02_dev *dev,
 
 	mt76_tx_status_unlock(mdev, &list);
 
-	if (!status.skb)
+	if (!status.skb) {
+		spin_lock_bh(&dev->mt76.rx_lock);
 		ieee80211_tx_status_ext(mt76_hw(dev), &status);
+		spin_unlock_bh(&dev->mt76.rx_lock);
+	}
 
 	if (!len)
 		goto out;

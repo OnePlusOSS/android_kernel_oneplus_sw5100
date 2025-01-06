@@ -19,7 +19,7 @@ struct tlb_inv_context {
 static void enter_vmid_context(struct kvm_s2_mmu *mmu,
 			       struct tlb_inv_context *cxt)
 {
-	struct kvm_s2_mmu *host_mmu = &host_kvm.arch.mmu;
+	struct kvm_s2_mmu *host_s2_mmu = &host_mmu.arch.mmu;
 	struct kvm_cpu_context *host_ctxt;
 	struct kvm_vcpu *vcpu;
 
@@ -32,13 +32,19 @@ static void enter_vmid_context(struct kvm_s2_mmu *mmu,
 	 * to do.
 	 */
 	if (vcpu) {
-		if (mmu == vcpu->arch.hw_mmu || WARN_ON(mmu != host_mmu))
+		/* We're in guest context */
+		if (mmu == vcpu->arch.hw_mmu || WARN_ON(mmu != host_s2_mmu))
 			return;
-	} else if (mmu == host_mmu) {
-		return;
+
+		cxt->mmu = vcpu->arch.hw_mmu;
+	} else {
+		/* We're in host context */
+		if (mmu == host_s2_mmu)
+			return;
+
+		cxt->mmu = host_s2_mmu;
 	}
 
-	cxt->mmu = mmu;
 	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
 		u64 val;
 

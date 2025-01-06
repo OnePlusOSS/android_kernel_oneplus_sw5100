@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2017, Linaro Ltd.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/firmware.h>
 #include <linux/module.h>
@@ -75,7 +76,7 @@ uint32_t qcom_sysmon_get_txn_id(struct qcom_sysmon *sysmon)
 {
 	return sysmon->transaction_id;
 }
-EXPORT_SYMBOL(qcom_sysmon_get_txn_id);
+EXPORT_SYMBOL_GPL(qcom_sysmon_get_txn_id);
 
 /**
  * sysmon_send_event() - send notification of other remote's SSR event
@@ -954,7 +955,7 @@ int qcom_sysmon_get_reason(struct qcom_sysmon *sysmon, char *buf, size_t len)
 out:
 	return ret;
 }
-EXPORT_SYMBOL(qcom_sysmon_get_reason);
+EXPORT_SYMBOL_GPL(qcom_sysmon_get_reason);
 
 /**
  * qcom_add_sysmon_subdev() - create a sysmon subdev for the given remoteproc

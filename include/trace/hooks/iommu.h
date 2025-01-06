@@ -6,13 +6,8 @@
 
 #if !defined(_TRACE_HOOK_IOMMU_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_IOMMU_H
+
 #include <trace/hooks/vendor_hooks.h>
-
-#include <linux/types.h>
-
-#ifdef __GENKSYMS__
-#include <linux/iova.h>
-#endif
 
 struct iova_domain;
 

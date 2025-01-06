@@ -73,4 +73,4 @@ int register_qcom_clks_pm(struct platform_device *pdev, bool runtime,
 
 	return 0;
 }
-EXPORT_SYMBOL(register_qcom_clks_pm);
+EXPORT_SYMBOL_GPL(register_qcom_clks_pm);

@@ -530,7 +530,7 @@ static void get_governor_trips(struct thermal_zone_device *tz,
 	last_active = INVALID_TRIP;
 	last_passive = INVALID_TRIP;
 
-	for (i = 0; i < tz->trips; i++) {
+	for (i = 0; i < tz->num_trips; i++) {
 		enum thermal_trip_type type;
 		int ret;
 
@@ -671,7 +671,7 @@ static int power_allocator_bind(struct thermal_zone_device *tz)
 
 	get_governor_trips(tz, params);
 
-	if (tz->trips > 0) {
+	if (tz->num_trips > 0) {
 		ret = tz->ops->get_trip_temp(tz,
 					params->trip_max_desired_temperature,
 					&control_temp);
@@ -725,22 +725,22 @@ static int power_allocator_throttle(struct thermal_zone_device *tz, int trip)
 		return 0;
 
 	/*
-	 * Control the IPA by user.
+	 * Enable or disable IPA control by temperature and user power budget.
 	 * About enable:
-	 *	true: enable IPA control.
-	 *	false: disable IPA control.
+	 *	true: enable IPA control when temperature >= swtich_on_temp.
+	 *	false: disable IPA control when temperature < switch_on_temp.
 	 * About override:
 	 *	true: power budget is overridden by user power budget.
 	 *	false: power budget is not overridden, there's no other thermal
 	 *	requirement.
 	 */
 	trace_android_vh_enable_thermal_power_throttle(&enable, &override);
-	ret = tz->ops->get_trip_temp(tz, params->trip_switch_on,
+	if (enable)
+		ret = tz->ops->get_trip_temp(tz, params->trip_switch_on,
 					     &switch_on_temp);
 	if (!enable || (!ret && (tz->temperature < switch_on_temp) &&
 			!override)) {
 		update = (tz->last_temperature >= switch_on_temp);
-		trace_android_vh_modify_thermal_throttle_update(tz, &update);
 		tz->passive = 0;
 		reset_pid_controller(params);
 		allow_maximum_power(tz, update);

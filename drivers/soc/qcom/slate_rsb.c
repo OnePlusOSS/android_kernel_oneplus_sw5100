@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(msg) "slatersb: %s: " msg, __func__
@@ -171,7 +171,7 @@ static void slatersb_slateup_work(struct work_struct *work)
 			pr_err("slatersb-rpmsg is not probed yet\n");
 
 		ret = wait_event_timeout(dev->link_state_wait,
-			dev->rsb_rpmsg, msecs_to_jiffies(TIMEOUT_MS));
+			dev->rsb_rpmsg, msecs_to_jiffies(TIMEOUT_MS_GLINK_OPEN));
 		if (ret == 0) {
 			pr_err("channel connection time out %d\n",
 						ret);

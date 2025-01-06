@@ -368,12 +368,12 @@ static void cfg80211_sched_scan_stop_wk(struct work_struct *work)
 	rdev = container_of(work, struct cfg80211_registered_device,
 			   sched_scan_stop_wk);
 
-	rtnl_lock();
+	wiphy_lock(&rdev->wiphy);
 	list_for_each_entry_safe(req, tmp, &rdev->sched_scan_req_list, list) {
 		if (req->nl_owner_dead)
 			cfg80211_stop_sched_scan_req(rdev, req, false);
 	}
-	rtnl_unlock();
+	wiphy_unlock(&rdev->wiphy);
 }
 
 static void cfg80211_propagate_radar_detect_wk(struct work_struct *work)
@@ -728,6 +728,7 @@ int wiphy_register(struct wiphy *wiphy)
 	if (wiphy->interface_modes & ~(BIT(NL80211_IFTYPE_STATION) |
 				       BIT(NL80211_IFTYPE_P2P_CLIENT) |
 				       BIT(NL80211_IFTYPE_AP) |
+				       BIT(NL80211_IFTYPE_MESH_POINT) |
 				       BIT(NL80211_IFTYPE_P2P_GO) |
 				       BIT(NL80211_IFTYPE_ADHOC) |
 				       BIT(NL80211_IFTYPE_P2P_DEVICE) |
@@ -933,23 +934,6 @@ int wiphy_register(struct wiphy *wiphy)
 	else if (wiphy->max_num_akm_suites < NL80211_MAX_NR_AKM_SUITES ||
 		 wiphy->max_num_akm_suites > CFG80211_MAX_NUM_AKM_SUITES)
 		return -EINVAL;
-
-	/* check backport information when indicated */
-	if (wiphy->backport) {
-		int i;
-		const struct wiphy_backport *backport = wiphy->backport;
-
-		/* should implement num_iftype_ext_capab2 */
-		if (WARN_ON(wiphy->num_iftype_ext_capab !=
-			    backport->num_iftype_ext_capab2))
-			return -EINVAL;
-
-		for (i = 0; i < wiphy->num_iftype_ext_capab; i++) {
-			if (WARN_ON(wiphy->iftype_ext_capab[i].iftype !=
-				    backport->iftype_ext_capab2[i].iftype))
-				return -EINVAL;
-		}
-	}
 
 	/* check and set up bitrates */
 	ieee80211_set_bitrate_flags(wiphy);
