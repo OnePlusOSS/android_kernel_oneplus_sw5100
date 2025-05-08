@@ -45,6 +45,14 @@ extern int high_temp;
 static int oplus_bark_cnt = 0;
 extern void oplus_power_supply_changed(struct power_supply *psy);
 
+void notice_charging_time(struct smb_charger *chg, bool awake)
+{
+	if (awake)
+		__pm_stay_awake(chg->charging_time);
+	else
+		__pm_relax(chg->charging_time);
+}
+
 #define typec_rp_med_high(chg, typec_mode)			\
 	((typec_mode == QTI_POWER_SUPPLY_TYPEC_SOURCE_MEDIUM	\
 	|| typec_mode == QTI_POWER_SUPPLY_TYPEC_SOURCE_HIGH)	\
@@ -618,7 +626,7 @@ static void smblite_lib_uusb_removal(struct smb_charger *chg)
 	/* Remove SW thermal regulation votes */
 	vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER, false, 0);
 	vote(chg->awake_votable, SW_THERM_REGULATION_VOTER, false, 0);
-
+	notice_charging_time(chg, false);
 	/* clear USB ICL vote for USB_PSY_VOTER */
 	rc = vote(chg->usb_icl_votable, USB_PSY_VOTER, false, 0);
 	if (rc < 0)
@@ -4243,6 +4251,7 @@ static void update_uisoc(struct smb_charger *chg, int soc)
 extern bool isStarRiverWatch(void);
 extern bool isSellMode(void);
 extern int g_vbat_cutoff_uv;
+extern bool soc_line_changed;
 static void adjust_uisoc_work(struct work_struct *work)
 {
 	struct smb_charger *chg = container_of(work, struct smb_charger, adjust_uisoc_work.work);
@@ -4362,8 +4371,9 @@ static void adjust_uisoc_work(struct work_struct *work)
 			/*but except sellmode*/
 			ui_soc = (ui_soc < 100) ? (ui_soc + 1) : 100;
 		}
-		else if ((chg->pre_chip_soc > chg->chip_soc)
-			&& time_is_before_jiffies(soc_down_jiffies)) {
+		else if ((!soc_line_changed) && (chg->chip_soc < 99) \
+			&& ((chg->pre_chip_soc > chg->chip_soc)
+			&& time_is_before_jiffies(soc_down_jiffies))) {
 			/*if status=charging&full, but batery is discharging*/
 			ui_soc = (ui_soc > 1) ? (ui_soc - 1) : 1;
 		}
@@ -4488,6 +4498,22 @@ void init_pmic_ponsoc(struct smb_charger *chg)
 
 	pr_info("init_pmic_ponsoc pre_android_soc=%d, ui_soc=%d\n", pre_android_soc, ui_soc);
 	update_uisoc(chg, ui_soc);
+}
+
+extern bool jiffestart;
+static void soc_ratio_work(struct work_struct *work)
+{
+	struct smb_charger *chg = container_of(work, struct smb_charger, soc_ratio_work.work);
+
+	if ((chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) && (chg->chip_soc == 99)) {
+		chg->chip_soc++;
+	}
+	notice_charging_time(chg, false);
+
+	pr_info("timeout chip_soc=%d\n", chg->chip_soc);
+	cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+	schedule_delayed_work(&chg->adjust_uisoc_work, 0);
+	jiffestart = false;
 }
 
 static void smblite_lib_pl_enable_work(struct work_struct *work)
@@ -4878,6 +4904,10 @@ int smblite_lib_init(struct smb_charger *chg)
 	INIT_DELAYED_WORK(&chg->pr_swap_detach_work,
 					smblite_lib_pr_swap_detach_work);
 	INIT_DELAYED_WORK(&chg->adjust_uisoc_work, adjust_uisoc_work);
+	INIT_DELAYED_WORK(&chg->soc_ratio_work, soc_ratio_work);
+	chg->charging_time = wakeup_source_register(chg->dev, "charging_time");
+	if (!chg->charging_time)
+		pr_err("charging_time registe failed\n");
 	chg->fake_capacity = -EINVAL;
 	chg->fake_batt_status = -EINVAL;
 	chg->sink_src_mode = UNATTACHED_MODE;
@@ -4951,6 +4981,7 @@ int smblite_lib_deinit(struct smb_charger *chg)
 	switch (chg->mode) {
 	case PARALLEL_MASTER:
 		cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+		cancel_delayed_work_sync(&chg->soc_ratio_work);
 		cancel_work_sync(&chg->bms_update_work);
 		cancel_work_sync(&chg->jeita_update_work);
 		cancel_delayed_work_sync(&chg->icl_change_work);

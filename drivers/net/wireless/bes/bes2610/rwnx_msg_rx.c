@@ -737,6 +737,9 @@ static inline int rwnx_rx_csa_finish_ind(struct rwnx_hw *rwnx_hw, struct rwnx_cm
 		if (ind->status)
 			return 0;
 
+		/* Marking that vif is in the CSA process */
+		vif->in_csa = true;
+
 		/* Update the channel context used by vif.
 		 * The information such as channel and bandwidth cannot be obtained
 		 * at here. The corresponding channel context will be updated when
@@ -1560,8 +1563,8 @@ static inline int rwnx_defer_sm_disconnect_ind(struct rwnx_hw *rwnx_hw, struct r
 	if (rwnx_narrow_ru_filter_acpt_all_beacon(rwnx_hw))
 		rwnx_narrow_ru_filter_reset(rwnx_hw);
 
-	/* Cancel key_install_defer_work or wait it finish */
-	bes_eapol_cancel_key_install_defer_work(rwnx_vif);
+	/* Clear stored key and skb */
+	bes_eapol_sta_stored_key_deinit(rwnx_vif);
 
 	/* Delete arp/gtk offload function */
 	bes_filter_manager_ctrl_gtk_rekey_offload_filter(rwnx_hw, rwnx_vif, false);

@@ -280,13 +280,17 @@ static int bes2610_wpa_cmd_btcoex_scan_stop(struct rwnx_vif *rwnx_vif, char *com
 int bes_wpa_priv_cmd_add_mc_and_mdns_filter(struct rwnx_hw *rwnx_hw, struct list_head *list_set_head,
 					   struct bes_capacity *stats)
 {
-	int ret = 0;
+	int ret = 0, i = 0;
 	u8 vif_idx = 0;
 	u32 vif_idx_map = 0;
 	struct rwnx_vif *rwnx_vif = NULL;
 	struct filter_item *item = NULL;
 	struct mac_addr bc_addr = {
 		.array = {0xffff, 0xffff, 0xffff},
+	};
+	uint8_t ipv6_ip[][16] = {
+		{ 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02 },
 	};
 
 	/* Get vif_idx_map value */
@@ -354,43 +358,35 @@ int bes_wpa_priv_cmd_add_mc_and_mdns_filter(struct rwnx_hw *rwnx_hw, struct list
 					"%s ERROR(%d): Fail to add ipv4/ipv6 multicast filter on vif %s at head\n",
 					__func__, ret, rwnx_vif->ndev->name);
 				break;
+			} else {
+				bes_info(BES_DBG_WPA_PRI_CMD,
+					 "%s Add multicast filter on vif %s when screen off\n",
+					 __func__, rwnx_vif->ndev->name);
 			}
 
-			// /* ipv4 mdns filter */
-			// item = bes_filter_manager_create_port(vif_idx, FILTER_IPV4_UDP_SRC_DST_SINGLE,
-			// 		5353, 5353, 0, RXF_ACCEPT); // match_mode is set to 0
-			// if (!item) {
-			// 	ret = -EINVAL;
-			// 	bes_err(BES_DBG_WPA_PRI_CMD,
-			// 		"%s ERROR(%d): Fail to create ipv4 mdns filter on vif %s at head\n",
-			// 		__func__, ret, rwnx_vif->ndev->name);
-			// 	break;
-			// }
-			// ret = bes_wowlan_insert_at_head(rwnx_hw, list_set_head, stats, item);
-			// if (ret) {
-			// 	bes_err(BES_DBG_WPA_PRI_CMD,
-			// 		"%s ERROR(%d): Fail to add ipv4 mdns filter on vif %s at head\n",
-			// 		__func__, ret, rwnx_vif->ndev->name);
-			// 	break;
-			// }
-
-			// /* ipv6 mdns filter */
-			// item = bes_filter_manager_create_port(vif_idx, FILTER_IPV6_UDP_SRC_DST_SINGLE,
-			// 		5353, 5353, 0, RXF_ACCEPT); // match_mode is set to 0
-			// if (!item) {
-			// 	ret = -EINVAL;
-			// 	bes_err(BES_DBG_WPA_PRI_CMD,
-			// 		"%s ERROR(%d): Fail to create ipv6 mdns filter on vif %s at head\n",
-			// 		__func__, ret, rwnx_vif->ndev->name);
-			// 	break;
-			// }
-			// ret = bes_wowlan_insert_at_head(rwnx_hw, list_set_head, stats, item);
-			// if (ret) {
-			// 	bes_err(BES_DBG_WPA_PRI_CMD,
-			// 		"%s ERROR(%d): Fail to add ipv6 mdns filter on vif %s at head\n",
-			// 		__func__, ret, rwnx_vif->ndev->name);
-			// 	break;
-			// }
+			/* specified IPv6 address */
+			for (i = 0; i < sizeof(ipv6_ip) / sizeof(ipv6_ip[0]); i++)
+			{
+				item = bes_filter_manager_create_ipv6_ip_addr(vif_idx, FILTER_IPV6_DST,
+									      (struct in6_addr *)&ipv6_ip[i],
+									      RXF_MATCH_EQUAL, RXF_REJECT);
+				if (!item) {
+					ret = -EINVAL;
+					bes_err(BES_DBG_WPA_PRI_CMD,
+						"%s ERROR(%d): Fail to create specified IPv6 address filter on vif %s at head. i:%d\n",
+						__func__, ret, rwnx_vif->ndev->name, i);
+					break;
+				}
+				ret = bes_wowlan_insert_at_head(rwnx_hw, list_set_head, stats, item);
+				if (ret) {
+					bes_err(BES_DBG_WPA_PRI_CMD,
+						"%s ERROR(%d): Fail to add specified IPv6 address filter on vif %s at head. i:%d\n",
+						__func__, ret, rwnx_vif->ndev->name, i);
+					break;
+				}
+			}
+			if (ret)
+				break;
 
 			/* Arp offload filter */
 			if (rwnx_hw->filter.arp_offload[vif_idx]) {
@@ -408,6 +404,10 @@ int bes_wpa_priv_cmd_add_mc_and_mdns_filter(struct rwnx_hw *rwnx_hw, struct list
 						"%s ERROR(%d): Fail to add arp filter on vif %s at head\n",
 						__func__, ret, rwnx_vif->ndev->name);
 					break;
+				} else {
+					bes_info(BES_DBG_WPA_PRI_CMD,
+						"%s Add arp offload filter on vif %s when screen off\n",
+						__func__, rwnx_vif->ndev->name);
 				}
 			}
 
@@ -472,7 +472,8 @@ int bes_wpa_priv_cmd_update_screen_suspend_filters(struct rwnx_hw *rwnx_hw, bool
 		   recording the last value of event count when refreshing screen-off filters */
 		if (rwnx_hw->wpa_priv_cmd.last_event_cnt == event_cnt) {
 			spin_unlock_bh(&rwnx_hw->wpa_priv_cmd.lock);
-			bes_dbg(BES_DBG_WPA_PRI_CMD, "%s do nothing\n", __func__);
+			bes_dbg(BES_DBG_WPA_PRI_CMD, "%s do nothing. event_cnt:%d\n",
+				__func__, event_cnt);
 			return 0;
 		} else {
 			rwnx_hw->wpa_priv_cmd.last_event_cnt = event_cnt;
@@ -481,7 +482,9 @@ int bes_wpa_priv_cmd_update_screen_suspend_filters(struct rwnx_hw *rwnx_hw, bool
 	spin_unlock_bh(&rwnx_hw->wpa_priv_cmd.lock);
 
 	bes_info(BES_DBG_WPA_PRI_CMD, "%s screen filter to %s. event_cnt:%d last_event_cnt:%d\n",
-		 __func__, suspend ? "ON" : "OFF", event_cnt, rwnx_hw->wpa_priv_cmd.last_event_cnt);
+		 __func__, suspend ? "ON" : "OFF",
+		 rwnx_hw->wpa_priv_cmd.event_cnt,
+		 rwnx_hw->wpa_priv_cmd.last_event_cnt);
 
 	/* Update the filters when screen status changed */
 	return bes_filter_manager_update_screen_suspend_filters(rwnx_hw, suspend);
@@ -496,7 +499,7 @@ static int bes2610_wpa_cmd_set_suspendmode(struct rwnx_vif *rwnx_vif, char *comm
 	if (suspend_flag != 0)
 		suspend_flag = 1;
 
-	bes_dbg(BES_DBG_WPA_PRI_CMD, "%s: command: %s , suspend_flag: %d\n", __FUNCTION__, command, suspend_flag);
+	bes_info(BES_DBG_WPA_PRI_CMD, "%s: command: %s , suspend_flag: %d\n", __FUNCTION__, command, suspend_flag);
 
 	if (!(bytes_written = bes_wpa_priv_cmd_update_screen_suspend_filters(rwnx_vif->rwnx_hw, !!suspend_flag)))
 		bes_dbg(BES_DBG_WPA_PRI_CMD, "%s: Suspend Mode %d\n", __FUNCTION__, suspend_flag);

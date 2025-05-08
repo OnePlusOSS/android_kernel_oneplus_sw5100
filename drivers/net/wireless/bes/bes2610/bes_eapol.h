@@ -21,9 +21,13 @@ enum bes_eapol_status {
 	BES_EAPOL_SUCCESS,
 };
 
+bool bes_eapol_defer_send_skb(struct sk_buff *skb);
+
 void bes_tx_eapol_completion_notify(struct rwnx_sw_txhdr *sw_txhdr, struct tx_cfm_tag *cfm);
 
 void bes_eapol_sta_stored_key_init(struct rwnx_vif *rwnx_vif);
+
+void bes_eapol_sta_stored_key_deinit(struct rwnx_vif *rwnx_vif);
 
 enum msg_eapol_t bes_eapol_get_pkt_type(struct eapol_hdr *eapol);
 

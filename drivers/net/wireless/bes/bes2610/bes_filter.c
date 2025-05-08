@@ -1346,7 +1346,7 @@ int bes_filter_add_ipv6_dst_match(struct rwnx_hw *rwnx_hw, u8 vif_idx, const str
 	memset(&item->content[0], 0xff, 2); // set mask
 	memcpy(&item->content[2], &h_proto, 2); // set pattern
 
-	// set rxf item to match ipv6 source address
+	// set rxf item to match ipv6 dest address
 	rxf_item_oft += item->len;
 	item_len = bes_filter_item_size + (16 << 1);
 	if (rxf_item_oft + item_len > BES_FILTER_PARAM_MAX_LEN)
@@ -1382,19 +1382,14 @@ int bes_filter_add_ipv6_ns_match(struct rwnx_hw *rwnx_hw, u8 vif_idx, u8 offload
 	u8 icmp6_type = 135; /* ICMPV6_NEIGHBOR_SOLICITATIO */
 	s8 f_idx = 0;
 	u8 rxf_item_oft = 0;
-	struct rwnx_vif *rwnx_vif = rwnx_rx_get_vif(rwnx_hw, vif_idx);
 	u16 item_len = 0;
-
-	/* Check if the virtual interface is valid */
-	if (!rwnx_vif)
-		return -EINVAL;
 
 	// set rxf item to match ipv6 packet
 	item_len = bes_filter_item_size + (2 << 1);
 	if (rxf_item_oft + item_len > BES_FILTER_PARAM_MAX_LEN)
 		return -ENOMEM;
 	item = (struct bes_filter_item *)&filter.filter_param[0];
-	item->action = RXF_CONTINUE;
+	item->action = RXF_ACCEPT;
 	item->len = item_len;
 	item->match_mode = RXF_MATCH_EQUAL;
 	item->offset = offsetof(struct ethhdr, h_proto);
@@ -1429,20 +1424,6 @@ int bes_filter_add_ipv6_ns_match(struct rwnx_hw *rwnx_hw, u8 vif_idx, u8 offload
 	item->pattern_len = 1;
 	memset(&item->content[0], 0xff, 1); // set mask
 	memcpy(&item->content[1], &icmp6_type, 1); // set pattern
-
-	// set rxf item to match icmpv6 target address
-	rxf_item_oft += item->len;
-	item_len = bes_filter_item_size + (sizeof(struct in6_addr) << 1);
-	if (rxf_item_oft + item_len > BES_FILTER_PARAM_MAX_LEN)
-		return -ENOMEM;
-	item = (struct bes_filter_item *)&filter.filter_param[rxf_item_oft];
-	item->action = RXF_ACCEPT;
-	item->len = item_len;
-	item->match_mode = RXF_MATCH_EQUAL;
-	item->offset = sizeof(struct ethhdr) + sizeof(struct ipv6hdr) + sizeof(struct icmp6hdr);
-	item->pattern_len = sizeof(struct in6_addr);
-	memset(&item->content[0], 0xff, sizeof(struct in6_addr)); // set mask
-	memcpy(&item->content[sizeof(struct in6_addr)], &rwnx_vif->ipv6_addr, sizeof(struct in6_addr)); // set pattern
 
 	// set filter header
 	filter.vif_rxf_idx = vif_idx;

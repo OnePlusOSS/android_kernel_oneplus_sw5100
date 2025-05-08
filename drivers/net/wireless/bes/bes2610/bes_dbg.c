@@ -137,7 +137,7 @@ static char *bes_dbg_get_icmp6_type_str(u8 icmp6_type)
 static int bes_dbg_get_icmp6_ns_na(struct sk_buff *skb, u8 tx_rx_status,
 				   char *buf, int bufsz)
 {
-	int len = 0;
+	int len = 0, offset = 0;
 	struct in6_addr target_addr;
 	struct in6_addr *target_addr_ptr;
 	struct icmpv6_option_lla option_lla;
@@ -154,6 +154,14 @@ static int bes_dbg_get_icmp6_ns_na(struct sk_buff *skb, u8 tx_rx_status,
 
 	len += scnprintf(&buf[len], bufsz - len - 1,
 			 " Target addr:%pI6c", target_addr_ptr);
+
+	/* Verify link-layer address is present */
+	offset = sizeof(struct ethhdr) + sizeof(struct ipv6hdr) + sizeof(struct icmp6hdr) +
+		 sizeof(struct in6_addr) + sizeof(struct icmpv6_option_lla);
+	if (tx_rx_status == FRAME_STATUS_TX || tx_rx_status == FRAME_STATUS_TX_CFM)
+		offset += RWNX_TX_HEADROOM;
+	if (offset > skb->len)
+		return len;
 
 	/* Parse ns/na link-layer address */
 	bes_sk_param.param_ptr = (void *)&option_lla;

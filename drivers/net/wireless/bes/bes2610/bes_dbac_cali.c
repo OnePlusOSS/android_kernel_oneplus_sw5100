@@ -203,6 +203,12 @@ static int bes_dbac_trigger_roc(struct rwnx_vif *rwnx_vif,
 	bool roc_ready = false;
 	int error = 0;
 
+	/* Check if the chan is valid */
+	if (!chan) {
+		bes_err(BES_DBG_CALI, "%s chan is NULL\n", __func__);
+		return -EINVAL;
+	}
+
 	/* record start roc start time */
 	start_time = ktime_get();
 
@@ -927,6 +933,9 @@ void bes_dbac_defer_cali_check(struct rwnx_hw *rwnx_hw)
 	u8 i = 0;
 	unsigned long chan_ctxt_bit_map = 0;
 	unsigned long defer_cali_vif_map = 0;
+	bool found;
+	u8 ctxt_chan, cali_idx;
+	struct bes_cali_result *cali_res = &rwnx_hw->rf_cali.cali_res[0];
 
 	/* When bt is playing music, don't calibration */
 	if ((bes_coex_bt_get_audio_state(rwnx_hw) != BES_BT_AUDIO_NONE))
@@ -962,21 +971,37 @@ void bes_dbac_defer_cali_check(struct rwnx_hw *rwnx_hw)
 		struct rwnx_vif *rwnx_vif = NULL;
 
 		/* Skip calibration if there isn't vifs that refrence to it */
-		if (chan_ctxt->count == 0)
+		if (!chan_ctxt->count || !cfg80211_chandef_valid(&chan_ctxt->chan_def))
 			continue;
 
-		/* Find a vif that bind to hte chan_ctxt */
+		/* Find a vif that bind to the chan_ctxt */
 		spin_lock_bh(&rwnx_hw->cb_lock);
 		list_for_each_entry(rwnx_vif, &rwnx_hw->vifs, list) {
 			/* vif needs to be connected */
 			if (!netif_running(rwnx_vif->ndev) ||
-				!netif_carrier_ok(rwnx_vif->ndev))
+			    !netif_carrier_ok(rwnx_vif->ndev))
 				continue;
 
 			if (rwnx_vif->ch_index == i)
 				break;
 		}
 		spin_unlock_bh(&rwnx_hw->cb_lock);
+
+		/* Found uncalibrated channel context. */
+		found = false;
+		ctxt_chan = (u8)ieee80211_frequency_to_channel(chan_ctxt->chan_def.center_freq1);
+		for (cali_idx = 0; cali_idx < MAX_COEXIST_CHAN_CTXT; cali_idx++) {
+			if (ctxt_chan == cali_res[cali_idx].channel) {
+				found = true;
+				break;
+			}
+		}
+
+		if (found) {
+			bes_info(BES_DBG_CALI, "Already do cali of freq(%d) on vif(%s)\n",
+				 chan_ctxt->chan_def.center_freq1, rwnx_vif->ndev->name);
+			continue;
+		}
 
 		/* Output debug information */
 		bes_info(BES_DBG_CALI, "do defered cali of freq(%d) on vif(%s)\n",
@@ -1296,10 +1321,37 @@ void bes_dbac_cali_after_csa(struct rwnx_vif *rwnx_vif)
 {
 	struct rwnx_chanctx *ctxt = NULL;
 	u8 ctxt_chan = 0;
-	struct rwnx_hw *rwnx_hw = rwnx_vif->rwnx_hw;
-	struct bes_cali_result *cali_res = &rwnx_hw->rf_cali.cali_res[0];
+	struct rwnx_hw *rwnx_hw;
+	struct bes_cali_result *cali_res;
 	u8 cali_idx, ctxt_idx;
 	bool found;
+	u8 vif_idx;
+
+	/* Check if the rwnx_vif is valid */
+	if (!rwnx_vif) {
+		bes_err(BES_DBG_CALI, "%s rwnx_vif is NULL\n", __func__);
+		return;
+	}
+
+	/* Check the validity of vif_index */
+	vif_idx = rwnx_vif->vif_index;
+	if (vif_idx >= NX_ITF_MAX){
+		bes_err(BES_DBG_CALI, "%s vif_idx(%d) is invalid\n",
+			__func__, vif_idx);
+		return;
+	}
+
+	/* Get the value of rwnx_hw and cali_res */
+	rwnx_hw = rwnx_vif->rwnx_hw;
+	cali_res = &rwnx_hw->rf_cali.cali_res[0];
+
+	/* Mark the vif which calibration is defered. */
+	if (bes_coex_bt_get_audio_state(rwnx_hw) != BES_BT_AUDIO_NONE) {
+		rwnx_hw->rf_cali.defer_cali_vif_map |= BIT(vif_idx);
+		bes_info(BES_DBG_CALI, "cali on vif(%s) defered\n",
+			 rwnx_vif->ndev->name);
+		return;
+	}
 
 	/* Invalid calibration data that is no longer used after CSA. */
 	bes_dbac_inval_cali_check(rwnx_hw);
@@ -1347,6 +1399,7 @@ static void bes_dbac_sta_csa_work(struct work_struct *work)
 	spin_lock_bh(&rwnx_hw->cb_lock);
 	rwnx_chanctx_unlink(rwnx_vif);
 	rwnx_chanctx_link(rwnx_vif, rwnx_csa->ch_idx, &rwnx_csa->chandef);
+	rwnx_vif->in_csa = false;
 	spin_unlock_bh(&rwnx_hw->cb_lock);
 
 	/* Update Records */

@@ -467,6 +467,7 @@ struct bes_vif_wpa_priv_cmd {
  * @vif_index: VIF index at fw level (used to index rwnx_hw->vif_table, and
  * rwnx_sta->vif_idx)
  * @ch_index: Channel context index (within rwnx_hw->chanctx_table)
+ * @in_csa: Indicate if vif is in the CSA process
  * @up: Indicate if associated netdev is up (i.e. Interface is created at fw level)
  * @use_4addr: Whether 4address mode should be use or not
  * @is_resending: Whether a frame is being resent on this interface
@@ -492,6 +493,7 @@ struct bes_vif_wpa_priv_cmd {
  * @sta_csa: Structure for the station Channel Switch Announcement.
  * @eapol_status: Record the current status of EAPOL
  * @sta_stored_key: Stored key of sta
+ * @deferred_txq: Queue of deferred skb
  * @wnm_process: Whether STA is in the WNM process
  * @conn_abort: Means aborting the connection or not
  * @retry_cnt: station connection retry count
@@ -525,6 +527,7 @@ struct rwnx_vif {
 	u8 drv_vif_index;
 	u8 vif_index;
 	u8 ch_index;
+	bool in_csa;
 	bool up;
 	bool use_4addr;
 	bool is_resending;
@@ -553,6 +556,7 @@ struct rwnx_vif {
 			struct wpa_ie_data sec;
 			atomic_t eapol_status;
 			struct bes_sta_stored_key sta_stored_key;
+			struct sk_buff_head deferred_txq;
 			bool wnm_process;
 			bool conn_abort;
 			u8 retry_cnt;

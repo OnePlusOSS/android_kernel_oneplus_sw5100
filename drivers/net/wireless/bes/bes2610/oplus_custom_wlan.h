@@ -7,6 +7,7 @@ int oplus_wlan_get_factory_mac(char *buf, int len);
 
 int oplus_custom_init(void);
 
+#define OPLUS_CONNECT_SCAN_DUR  40000
 #define OPLUSMACDBG				"%02x:xx:xx:xx:x%x:%02x"
 #define OPLUSMAC2STRDBG(ea)	((const u8*)(ea))[0], \
 			(((const u8*)(ea))[4] & 0xf), \

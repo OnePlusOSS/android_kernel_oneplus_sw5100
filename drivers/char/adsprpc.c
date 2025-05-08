@@ -1194,6 +1194,11 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd, struct dma_buf *
 				goto bail;
 		}
 	} else if (mflags == FASTRPC_MAP_FD_NOMAP) {
+		if (map->attr & FASTRPC_ATTR_KEEP_MAP) {
+			ADSPRPC_ERR("Invalid attribute 0x%x for fd %d\n", map->attr, fd);
+			err = -EINVAL;
+			goto bail;
+		}
 		VERIFY(err, !IS_ERR_OR_NULL(map->buf = dma_buf_get(fd)));
 		if (err) {
 			ADSPRPC_ERR("dma_buf_get failed for fd %d ret %ld\n",
@@ -1392,6 +1397,7 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd, struct dma_buf *
 	else
 		fl->mem_snap.nonheap_bufs_size += map->size;
 	spin_unlock(&fl->hlock);
+
 	if ((mflags != ADSP_MMAP_HEAP_ADDR) &&
 			(mflags != ADSP_MMAP_REMOTE_HEAP_ADDR))
 		fastrpc_mmap_add(map);
@@ -2565,6 +2571,7 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 					pages[i].addr = mmap->phys;
 					pages[i].size = mmap->size;
 				}
+
 			} else {
 				/* map already freed by some other call */
 				mutex_unlock(&ctx->fl->map_mutex);
@@ -4266,7 +4273,40 @@ static bool fastrpc_session_exists(struct fastrpc_apps *me, uint32_t cid, int tg
 
 	return session_found;
 }
+int fastrpc_register_phys_range(struct fastrpc_file *fl)
+{
+	struct fastrpc_ioctl_invoke_async ioctl;
+	remote_arg_t ra[2] = {};
+	struct smq_phy_page page;
+	int num = 1;
+	int err = 0;
+	struct fastrpc_apps *me = &gfa;
+	struct {
+		int num;
+	} inargs;
 
+	inargs.num = sizeof(page);
+	ra[0].buf.pv = (void *)&inargs;
+	ra[0].buf.len = sizeof(inargs);
+	page.addr = me->range.addr;
+	page.size = me->range.size;
+	ra[1].buf.pv = (void *)&page;
+	ra[1].buf.len = num * sizeof(page);
+
+	ioctl.inv.handle = FASTRPC_STATIC_HANDLE_PROCESS_GROUP;
+	ioctl.inv.sc = REMOTE_SCALARS_MAKE(13, 2, 0);
+	ioctl.inv.pra = ra;
+	ioctl.fds = NULL;
+	ioctl.attrs = NULL;
+	ioctl.crc = NULL;
+	ioctl.perf_kernel = NULL;
+	ioctl.perf_dsp = NULL;
+	ioctl.job = NULL;
+	err = fastrpc_internal_invoke(fl,
+		FASTRPC_MODE_PARALLEL, KERNEL_MSG_WITH_ZERO_PID, &ioctl);
+
+	return err;
+}
 int fastrpc_init_process(struct fastrpc_file *fl,
 				struct fastrpc_ioctl_init_attrs *uproc)
 {
@@ -4326,6 +4366,8 @@ int fastrpc_init_process(struct fastrpc_file *fl,
 	case FASTRPC_INIT_ATTACH:
 	case FASTRPC_INIT_ATTACH_SENSORS:
 		err = fastrpc_init_attach_process(fl, init);
+		if (!err && cid == MDSP_DOMAIN_ID && me->range.addr && me->range.size)
+			err = fastrpc_register_phys_range(fl);
 		break;
 	case FASTRPC_INIT_CREATE:
 		err = fastrpc_init_create_dynamic_process(fl, uproc);

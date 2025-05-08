@@ -1092,7 +1092,7 @@ report:
 	}
 
 	/* Report wakeup reason */
-	if (!rwnx_vif)
+	if (rwnx_vif)
 		cfg80211_report_wowlan_wakeup(&rwnx_vif->wdev, wakeup_report, GFP_KERNEL);
 }
 

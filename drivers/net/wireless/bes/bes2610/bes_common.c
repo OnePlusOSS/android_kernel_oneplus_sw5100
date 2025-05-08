@@ -857,8 +857,9 @@ void *bes_common_get_param_ptr(struct sk_buff *skb, struct bes_sk_param *sk_para
 	}
 
 	if (!param_ptr) {
-		bes_warn(BES_DBG_COMMON, "%s failed, tx_rx_status:%d offset:%d size:%d\n",
-			 __func__, tx_rx_status, sk_param_ptr->offset, sk_param_ptr->size);
+		bes_warn(BES_DBG_COMMON, "%s failed, tx_rx_status:%d offset:%d size:%d skb->len:%d %pS\n",
+			 __func__, tx_rx_status, sk_param_ptr->offset, sk_param_ptr->size,
+			 skb->len, __builtin_return_address(0));
 	}
 
 	return param_ptr;

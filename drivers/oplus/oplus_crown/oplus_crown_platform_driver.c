@@ -1,5 +1,6 @@
 #include "oplus_crown.h"
 #include <linux/vmalloc.h>
+#include <linux/mutex.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt) OPLUS_CROWN_DEV_NAME ":%s(): " fmt, __func__
@@ -11,6 +12,8 @@ bool oplus_support_crown(void)
 
 char *proc_buff = NULL;
 #define PROC_BUFF_LEN 2048
+
+struct mutex probe_lock;
 
 uint static_xcpi = OPLUS_CROWN_CPI_RESOLUTION_X_STATIC;
 uint auto_suspend = OPLUS_CROWN_SAMPLING_AUTO_REDUCTION_TIMEOUT_US;
@@ -969,14 +972,18 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 	struct device *dev = &client->dev;
 	static bool already_init = false;
 
+	mutex_lock(&probe_lock);
+
 	if (already_init) {
 		dev_info(dev, "%s: already init, skip\n", __func__);
-		return 0;
+		err = 0;
+		goto err_unlock_mutex;
 	}
 
 	if (!oplus_support_crown()) {
 		dev_err(dev, "%s: not support\n", __func__);
-		return 0;
+		err = 0;
+		goto err_unlock_mutex;
 	}
 
 	dev_info(dev, "%s: entry\n", __func__);
@@ -984,24 +991,28 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 	err = i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE);
 	if (err < 0) {
 		dev_err(dev, "I2C not supported\n");
-		return -ENXIO;
+		err = -ENXIO;
+		goto err_unlock_mutex;
 	}
 
 	if (client->dev.of_node) {
 		pdata = devm_kzalloc(dev, sizeof(struct oplus_crown_platform_data),
 				GFP_KERNEL);
-		if (!pdata)
-			return -ENOMEM;
+		if (!pdata) {
+			err = -ENOMEM;
+			goto err_unlock_mutex;
+		}
 		err = oplus_crown_parse_dt(dev, pdata);
 		if (err) {
 			dev_err(dev, "DT parsing failed, errno:%d\n", err);
-			return err;
+			goto err_unlock_mutex;
 		}
 	} else {
 		pdata = client->dev.platform_data;
 		if (!pdata) {
 			dev_err(dev, "Invalid oplus crown data\n");
-			return -EINVAL;
+			err = -EINVAL;
+			goto err_unlock_mutex;
 		}
 	}
 	pdata->client = client;
@@ -1009,7 +1020,8 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 	input = devm_input_allocate_device(dev);
 	if (!input) {
 		dev_err(dev, "Failed to alloc input device\n");
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto err_unlock_mutex;
 	}
 
 	input_set_capability(input, EV_REL, REL_WHEEL);
@@ -1026,7 +1038,7 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 	err = input_register_device(pdata->input);
 	if (err < 0) {
 		dev_err(dev, "Failed to register input device\n");
-		return err;
+		goto err_unlock_mutex;
 	}
 
 	err = oplus_crown_pinctrl_init(pdata);
@@ -1046,24 +1058,25 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 						"oplus_crown_irq_gpio");
 			if (err) {
 				dev_err(dev, "Couldn't request gpio %d\n", err);
-				return err;
+				goto err_unlock_mutex;
 			}
 			err = gpio_direction_input(pdata->irq_gpio);
 			if (err) {
 				dev_err(dev, "Couldn't set dir for gpio %d\n", err);
-				return err;
+				goto err_unlock_mutex;
 			}
 
 		} else {
 			dev_err(dev, "Invalid gpio %d\n", pdata->irq_gpio);
-			return -EINVAL;
+			err = -EINVAL;
+			goto err_unlock_mutex;
 		}
 	}
 
 	err = oplus_crown_regulator_init(pdata);
 	if (err) {
 		dev_err(dev, "Failed to init regulator, %d\n", err);
-		return err;
+		goto err_unlock_mutex;
 	}
 
 #ifdef CONFIG_OPLUS_SWITCH
@@ -1137,7 +1150,8 @@ static int oplus_crown_i2c_probe(struct i2c_client *client,
 	already_init = true;
 
 	dev_info(dev, "%s: succeed\n", __func__);
-	return 0;
+	err = 0;
+	goto err_unlock_mutex;
 
 err_request_threaded_irq:
 err_sysfs_create:
@@ -1156,7 +1170,8 @@ err_wakeup_source_register:
 		if (pinctrl_select_state(pdata->pinctrl,
 				pdata->pinctrl_state_release) < 0)
 			dev_err(dev, "Couldn't set pin to release state\n");*/
-
+err_unlock_mutex:
+	mutex_unlock(&probe_lock);
 	return err;
 }
 
@@ -1228,6 +1243,9 @@ static int __init oplus_crown_init(void)
 #ifndef OPLUS_CROWN_GET_CPI_X_BY_SETUP
 	set_cpi_resolution_x(cpi_x);
 #endif /* OPLUS_CROWN_GET_CPI_X_BY_SETUP */
+
+	mutex_init(&probe_lock);
+
 	return i2c_add_driver(&oplus_crown_i2c_driver);
 }
 

@@ -97,6 +97,7 @@ static uint user_printk_disable_uart = 1;
 static uint is_user_build_variant = 0;
 static uint is_recovery_mode = 0;
 static uint deep_dischrg_count = 0;
+static uint clikshutdown = 0;
 
 /******************************************************************************/
 module_param(sec_status, uint, 0444);
@@ -129,9 +130,11 @@ MODULE_PARM_DESC(uart_enable, "Oplus Uart Enable");
 module_param(deep_dischrg_count, uint, 0444);
 MODULE_PARM_DESC(deep_dischrg_count, "Oplus Deep Discharge Count");
 
+module_param(clikshutdown, uint, 0444);
+MODULE_PARM_DESC(clikshutdown, "Oplus Clikshutdown");
+
 module_param(boot_silence, uint, 0444);
 MODULE_PARM_DESC(boot_silence, "Oplus Boot Silence");
-
 
 uint __always_inline get_oplus_hw_id(void)
 {
@@ -232,6 +235,12 @@ uint  get_deep_dischrg_count(void)
 	return deep_dischrg_count;
 }
 EXPORT_SYMBOL(get_deep_dischrg_count);
+
+uint get_clikshutdown(void)
+{
+	return clikshutdown;
+}
+EXPORT_SYMBOL(get_clikshutdown);
 
 /******************************************************************************/
 #if 0

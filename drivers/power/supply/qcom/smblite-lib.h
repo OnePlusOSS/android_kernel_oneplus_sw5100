@@ -312,6 +312,7 @@ struct smb_charger {
 	struct mutex		dpdm_pulse_lock;
 	struct mutex		init_soc_lock;
 	struct mutex		update_uisoc_lock;
+	struct wakeup_source    *charging_time;
 	/* power supplies */
 	struct power_supply		*batt_psy;
 	struct power_supply		*usb_psy;
@@ -355,6 +356,7 @@ struct smb_charger {
 	struct delayed_work	role_reversal_check;
 	struct delayed_work	pr_swap_detach_work;
 	struct delayed_work	adjust_uisoc_work;
+	struct delayed_work	soc_ratio_work;
 
 	struct charger_param	chg_param;
 

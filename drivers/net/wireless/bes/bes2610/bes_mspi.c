@@ -70,6 +70,10 @@ const static char* mspi_state_strs[] = {
 	"SPI_XFER",
 	"TX_SEQ",
 	"RX_SEQ",
+	"RX_STAGE",
+	"RX_FIRST_HDR",
+	"RX_SECOND_HDR",
+	"RX_THIRD_HDR",
 };
 
 struct mspi_state_record_ctxt state_ctxt;
@@ -366,10 +370,12 @@ static int bes_mspi_data_integrity(struct bes_spi *bes_spi, struct bes_spi_trans
 	int ret;
 	struct mspi_aggr_header_t *hdr;
 
+	mspi_state_record_info(MSPI_STATE_RX_STAGE, bes_spi->rx_stage);
 	if (bes_spi->rx_stage == FIRST_DATA) {
 		hdr = bes_mspi_first_data(bes_spi, xfer);
 		bes_spi->rx_aggr_num = hdr->aggr_num;
 		bes_spi->rx_aggr_len = hdr->aggr_len;
+		mspi_state_record_info(MSPI_STATE_RX_FIRST_HDR, hdr->aggr_len);
 		if (hdr->aggr_len <= blksize - sizeof(struct mspi_aggr_header_t)) {
 			ret = 1;
 		} else {
@@ -381,6 +387,10 @@ static int bes_mspi_data_integrity(struct bes_spi *bes_spi, struct bes_spi_trans
 		hdr = bes_mspi_first_data(bes_spi, xfer);
 		bes_spi->rx_aggr_num = hdr->aggr_num;
 		bes_spi->rx_aggr_len = hdr->aggr_len;
+		if (bes_spi->rx_stage == SECOND_DATA)
+			mspi_state_record_info(MSPI_STATE_RX_SECOND_HDR, hdr->aggr_len);
+		else
+			mspi_state_record_info(MSPI_STATE_RX_FIRST_HDR, hdr->aggr_len);
 		ret = 1;
 	} else {
 		BUG_ON(1);
@@ -466,6 +476,7 @@ static int bes_mspi_parse_data(struct bes_spi *bes_spi, struct bes_spi_transfer_
 		}
 		hdr = (struct mspi_aggr_header_t *)(buf + sizeof(struct mspi_aggr_header_t) * 2 + len);
 		if (hdr->type == MSPI_XFER_LEN_INFO) {
+			mspi_state_record_info(MSPI_STATE_RX_THIRD_HDR, hdr->aggr_len);
 			bes_dbg(BES_DBG_SPI, "%s third header aggr num=%u len=%u\n", __func__, hdr->aggr_num, hdr->aggr_len);
 			if ((hdr->type == MSPI_XFER_LEN_INFO) && hdr->aggr_len) {
 				bes_spi->rx_aggr_num = hdr->aggr_num;

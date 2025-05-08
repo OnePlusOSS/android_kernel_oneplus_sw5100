@@ -27,6 +27,7 @@
 #include "schgm-flashlite.h"
 
 static struct power_supply_desc usb_psy_desc;
+struct smb_charger *smb_chg = NULL;
 
 extern unsigned int get_oplus_hw_id(void);
 extern int oplus_enter_shipmode(void);
@@ -295,6 +296,12 @@ bool isStarRiverWatch(void)
 	return ((get_oplus_hw_id() == 6)||(get_oplus_hw_id() == 7));
 }
 EXPORT_SYMBOL_GPL(isStarRiverWatch);
+
+bool isAstraWatch(void)
+{
+	return ((get_oplus_hw_id() == 8)||(get_oplus_hw_id() == 9));
+}
+EXPORT_SYMBOL_GPL(isAstraWatch);
 
 static ssize_t weak_chg_icl_ua_show(struct device *dev, struct device_attribute
 				    *attr, char *buf)
@@ -838,41 +845,67 @@ bool isSellMode(void)
 }
 EXPORT_SYMBOL(isSellMode);
 
+#define SOC_HOLD_TIMEOUT	(1000*60*5)	//5min
+static int pre_chg_status = 0;
+static int soc_before_linechange = 0;
+bool soc_line_changed = true;
+bool jiffestart =false;
+extern void notice_charging_time(struct smb_charger *chg, bool awake);
+
 void sync_soc_ratio(int *soccal)
 {
-	if(*soccal == 0)
+	if ((*soccal == 0) || (!smb_chg))
 		return;
 
-	/*if (*soccal < 56) {
-		*soccal = ((*soccal * 112) / 100);
-	}
-	else if (*soccal < 63) {
-		*soccal = ((*soccal * 109) / 100);
-	}
-	else if (*soccal < 64) {
-		*soccal = ((*soccal * 108) / 100);
-	}
-	else*/
-	if (*soccal < 67) {
-		*soccal = ((*soccal * 107) / 100);
-	}
-	else if (*soccal < 73) {
-		*soccal = ((*soccal * 106) / 100);
-	}
-	else if (*soccal < 76) {
-		*soccal = ((*soccal * 105) / 100);
-	}
-	else if (*soccal < 82) {
-		*soccal = ((*soccal * 104) / 100);
-	}
-	else if (*soccal < 91) {
-		*soccal = ((*soccal * 103) / 100);
-	}
-	else {
-		*soccal = ((*soccal * 102) / 100);
+	if (smb_chg->batt_status == POWER_SUPPLY_STATUS_CHARGING)
+	{
+		if (*soccal < 67) {
+			*soccal = ((*soccal * 107) / 100);
+		}
+		else if (*soccal < 76) {
+			*soccal = ((*soccal * 105) / 100);
+		}
+		else if (*soccal < 82) {
+			*soccal = ((*soccal * 103) / 100);
+		}
+		else if (*soccal < 91) {
+			*soccal = ((*soccal * 102) / 100);
+		}
+		else {
+			*soccal = (*soccal);
+		}
+	}else {
+		if (*soccal < 67) {
+			*soccal = ((*soccal * 107) / 100);
+		}
+		else if (*soccal < 73) {
+			*soccal = ((*soccal * 106) / 100);
+		}
+		else if (*soccal < 76) {
+			*soccal = ((*soccal * 105) / 100);
+		}
+		else if (*soccal < 82) {
+			*soccal = ((*soccal * 104) / 100);
+		}
+		else if (*soccal < 91) {
+			*soccal = ((*soccal * 103) / 100);
+		}
+		else {
+			*soccal = ((*soccal * 102) / 100);
+		}
 	}
 
 	*soccal = (*soccal > 100) ? 100: *soccal;
+
+	if (pre_chg_status != smb_chg->batt_status)
+	{
+		soc_line_changed = true;
+		soc_before_linechange = smb_chg->pre_chip_soc;
+	} else {
+		if ((soc_before_linechange - *soccal) != 1) //the soc gap between discharge and charging is 1
+			soc_line_changed = false;
+	}
+	pre_chg_status = smb_chg->batt_status;
 }
 
 void enable_charge(struct smb_charger *chg, bool enable) {
@@ -949,6 +982,13 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		chg->chip_soc = val->intval;
 		/*return ui_soc*/
 		if (ponsoc_inited) {
+			if ((chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) && (val->intval == 99) && (!jiffestart)) {//avoid 99 lasts for a long time
+				cancel_delayed_work_sync(&chg->soc_ratio_work);
+				schedule_delayed_work(&chg->soc_ratio_work, msecs_to_jiffies(SOC_HOLD_TIMEOUT));
+				notice_charging_time(chg, true);
+				jiffestart = true;
+				pr_info("starttime %d\n", chg->chip_soc);
+			}
 			if ((chg->batt_vol <= g_vbat_cutoff_uv + ULTRA_LOW_VOLTAGE_GAP_UV)
 				|| (chg->batt_status == POWER_SUPPLY_STATUS_FULL)
 				|| (chg->chip_soc != chg->pre_chip_soc)) {
@@ -1103,7 +1143,8 @@ static int smblite_batt_set_prop(struct power_supply *psy,
 			vote(chg->fcc_votable, DEFAULT_VOTER, false, 0);
 			vote(chg->fcc_votable, BATT_PROFILE_VOTER, true, chg->batt_profile_fcc_ua);
 		}
-		pr_info("chg_limit %d \n",chg->chg_limit);
+		if (charger_log_enable)
+			pr_info("chg_limit %d \n",chg->chg_limit);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
 		rc = smblite_lib_set_prop_input_suspend(chg, val->intval);
@@ -2631,6 +2672,8 @@ static int smblite_probe(struct platform_device *pdev)
 	rc = smblite_lib_get_prop_usb_present(chg, &pval);
 	if (rc < 0)
 		pr_err("Couldn't read usb present rc=%d\n", rc);
+
+	smb_chg = chg;
 
 	pr_info("%s charger probed successfully, charger_present=%d\n",
 			chg->name, pval.intval);

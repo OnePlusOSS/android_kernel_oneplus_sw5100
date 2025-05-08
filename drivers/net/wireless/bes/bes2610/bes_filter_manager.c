@@ -122,8 +122,7 @@ int bes_filter_manager_filter_size(u8 wf_type, u8 action, struct filter_item_par
 			size = 4 * bes_filter_item_size +
 				(2 << 1) /* ipv6 type match item*/ +
 				(1 << 1) /* icmpv6 type match item */ +
-				(1 << 1) /* icmpv6 neighbor solicitation type match item */ +
-				(sizeof(struct in6_addr) << 1) /* icmpv6 target address */;
+				(1 << 1) /* icmpv6 neighbor solicitation type match item */;
 			break;
 		default:
 			size = -1 /* error, no match */;
@@ -371,6 +370,9 @@ static int bes_filter_manager_set_to_device(struct rwnx_hw *rwnx_hw, struct filt
 		case FILTER_ALL_MULTICAST:
 			f_idx = bes_filter_add_all_multicast_match(rwnx_hw, item->vif_idx,
 					item->action);
+			bes_info(BES_DBG_FILTER_MANAGER,
+				 "%s, set all multicast filter on vif-%d.action:%d\n",
+				 __func__, item->vif_idx, item->action);
 			break;
 		case FILTER_PATTERN:
 			f_idx = bes_filter_add_pattern_match(rwnx_hw, item->vif_idx,
@@ -1450,16 +1452,18 @@ int bes_filter_manager_update_screen_suspend_filters(struct rwnx_hw *rwnx_hw, bo
 		if (!ret)
 			goto out;
 	}
+	bes_err_with_cond(ret, BES_DBG_FILTER_MANAGER,
+			  "%s ERROR(%d): Fail to set screen-off filters!!\n",
+			  __func__, ret);
 
 	/* Set the filters when screen on or failing to set the filters for screen off */
 	ret = bes_filter_manager_screen_on(rwnx_hw);
+	bes_err_with_cond(ret, BES_DBG_FILTER_MANAGER,
+			  "%s ERROR(%d): Fail to set screen-on filters!! suspend:%d\n",
+			  __func__, ret, suspend);
 
 out:
 	mutex_unlock(&rwnx_hw->filter.mutex);
-
-	bes_err_with_cond(ret, BES_DBG_FILTER_MANAGER,
-			  "%s ERROR(%d): Fail to update screen-off filters!! suspend:%d\n",
-			  __func__, ret, suspend);
 
 	return ret;
 }

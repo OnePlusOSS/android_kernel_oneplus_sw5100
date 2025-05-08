@@ -119,6 +119,9 @@
 #define VADC_ANA_PARAM_4			0x46
 
 static int qbg_debug_mask;
+#define ASTRA_NORMAL_CUTOFF_VOL_UV                  3300000
+#define ASTRA_LOW_TEMP_CUTOFF_VOL_UV                3350000
+
 #define VBAT_CUTOFF_TO_EMPTY_GAP_MV			100
 #define OPLUS_HIGH_TEMP_AGING_TEST_MAX_VOL	4510000
 #define OPLUS_LOWEST_TEMP			 -80
@@ -131,6 +134,7 @@ extern int high_temp;
 /*get battery cutoff voltage by deep discharge count*/
 extern unsigned int get_deep_dischrg_count(void);
 extern bool isStarRiverWatch(void);
+extern bool isAstraWatch(void);
 extern void oplus_trigger_recharge(void);
 
 #define DEEP_DISCHRG_COUNT_THRESHOLD_1		50
@@ -1731,7 +1735,10 @@ static int qbg_get_pon_reading(struct qti_qbg *chip, unsigned int *ocv,
 
 #define DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF	10
 #define DEFAULT_IGNORE_SHUTDOWN_SOC_SECS	600
-
+#define OCV_CIRCLEBATT_94PUV				(44100*10000)
+#define OCV_CIRCLEBATT_99PUV				(45000*10000)
+#define ONEDAY_SECOND					(24*60*60)
+extern unsigned int get_clikshutdown(void);
 static int qbg_determine_pon_soc(struct qti_qbg *chip)
 {
 	int rc, batt_temp;
@@ -1740,6 +1747,7 @@ static int qbg_determine_pon_soc(struct qti_qbg *chip)
 	unsigned int pon_ocv;
 	time64_t rtc_sec;
 	unsigned int temp_diff = 0;
+	unsigned int clikshutdown = 0;
 
 	/* Get RTC time here */
 	rc = get_rtc_time(chip, &rtc_sec);
@@ -1795,6 +1803,11 @@ static int qbg_determine_pon_soc(struct qti_qbg *chip)
 
 	time_diff = rtc_sec - (chip->essential_params).rtc_time;
 	temp_diff = abs(chip->pon_tbat - (chip->essential_params).batt_therm *10)/10;
+	clikshutdown = get_clikshutdown();
+	if ((clikshutdown) && (chip->pon_ocv > OCV_CIRCLEBATT_94PUV) && (time_diff < ONEDAY_SECOND)) {
+		chip->pon_ocv = OCV_CIRCLEBATT_99PUV;
+	}
+	pr_info("pon=%d OCV=%d tmdiff=%lus clikshud100=%d\n", pon_ocv, chip->pon_ocv, time_diff,clikshutdown);
 
 	if((temp_diff < DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF) && (time_diff < DEFAULT_IGNORE_SHUTDOWN_SOC_SECS)
 		&& ((chip->essential_params).rtc_time > 0) && ((chip->essential_params).full_soc > 0)) {
@@ -1898,6 +1911,25 @@ static void status_change_work(struct work_struct *work)
 		chip->in_recharge = false;
 	}
 	chip->charger_present = charger_present;
+	if(isAstraWatch()) {
+		rc = power_supply_get_property(chip->batt_psy,
+					POWER_SUPPLY_PROP_TEMP, &prop);
+		if (rc < 0) {
+			pr_err("Failed to get qbg temp, rc=%d\n", rc);
+			goto out;
+		}
+		batt_temp = prop.intval;
+
+		if (batt_temp < chip->batt_temp_coeffs[3]) { /*temp < 17C*/
+			g_vbat_cutoff_uv = ASTRA_LOW_TEMP_CUTOFF_VOL_UV;
+		}
+		else {
+			g_vbat_cutoff_uv = ASTRA_NORMAL_CUTOFF_VOL_UV;
+		}
+		if (charger_log_enable)
+			pr_info("temp=%d, set cutoff_voltage=%d\n", batt_temp, g_vbat_cutoff_uv);
+	}
+
 	if (chip->charge_status != POWER_SUPPLY_STATUS_DISCHARGING)
 	{
 		if (charger_log_enable) {
@@ -1906,13 +1938,15 @@ static void status_change_work(struct work_struct *work)
 					  POWER_SUPPLY_PROP_CURRENT_NOW, &prop);
 			pr_info("usb current:%d\n", prop.intval);
 		}
-		rc = power_supply_get_property(chip->batt_psy,
-					POWER_SUPPLY_PROP_TEMP, &prop);
-		if (rc < 0) {
-			pr_err("Failed to get qbg temp, rc=%d\n", rc);
-			goto out;
+		if (batt_temp == 0) {
+			rc = power_supply_get_property(chip->batt_psy,
+						POWER_SUPPLY_PROP_TEMP, &prop);
+			if (rc < 0) {
+				pr_err("Failed to get qbg temp, rc=%d\n", rc);
+				goto out;
+			}
+			batt_temp = prop.intval;
 		}
-		batt_temp = prop.intval;
 
 		if ((batt_temp < OPLUS_LOWEST_TEMP) || (batt_temp >= chip->batt_temp_coeffs[8]) \
 				|| is_debug_batt_id(chip))

@@ -18,5 +18,6 @@ unsigned int get_boot_silence(void);
 bool is_user_build(void);
 bool is_recovery(void);
 unsigned int get_deep_dischrg_count(void);
+unsigned int get_clikshutdown(void);
 
 #endif /* __OPLUS_CMDLINE_PARSER_H */

@@ -22,6 +22,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/suspend.h>
 #include <linux/ipc_logging.h>
+#include <linux/qcom_scm.h>
+#include <linux/reboot.h>
 #include "slatecom.h"
 #include <linux/soc/qcom/slatecom_interface.h>
 
@@ -1564,6 +1566,21 @@ static struct notifier_block slatecom_pm_nb = {
 		.notifier_call = slatecom_pm_notifier,
 };
 
+static int slatecom_reboot_notifier(struct notifier_block *nb, unsigned long event, void *unused)
+{
+	if (is_hibernate) {
+		pr_info("%s: slatecom hibernate reboot\n", __func__);
+		qcom_scm_custom_reset_type = QCOM_SCM_RST_SHUTDOWN_TO_TWM_MODE;
+	} else
+		pr_debug("%s: slatecom normal reboot\n", __func__);
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block slatecom_reboot_nb = {
+	.notifier_call = slatecom_reboot_notifier,
+};
+
 static int slate_spi_probe(struct spi_device *spi)
 {
 	struct slate_spi_priv *slate_spi;
@@ -1615,6 +1632,12 @@ static int slate_spi_probe(struct spi_device *spi)
 		goto err_ret;
 	}
 
+	ret = register_reboot_notifier(&slatecom_reboot_nb);
+	if (ret) {
+		pr_err("slatecom reboot notif error %d\n", ret);
+		goto err_ret;
+	}
+
 	pr_info("%s success\n", __func__);
 	pr_info("Slatecom Probed successfully\n");
 	return ret;
@@ -1640,6 +1663,7 @@ static int slate_spi_remove(struct spi_device *spi)
 	mutex_destroy(&cma_buffer_lock);
 	mutex_destroy(&slate_task_mutex);
 	unregister_pm_notifier(&slatecom_pm_nb);
+	unregister_reboot_notifier(&slatecom_reboot_nb);
 	return 0;
 }
 
@@ -1677,14 +1701,15 @@ static int slatecom_pm_prepare(struct device *dev)
 		SLATECOM_INFO("spi is already inactive, get_sync.\n");
 		pm_runtime_get_sync(&s_dev->dev);
 		usleep_range(5000, 10000);
-	} else {
+	} else
 		SLATECOM_INFO("spi is already active, skip get_sync.\n");
-	}
-
 	atomic_set(&ok_to_sleep, 1);
 	ret = slatecom_reg_write_cmd(&clnt_handle, SLATE_CMND_REG, 1, &cmnd_reg, true);
-	if (ret < 0)
+	if (ret < 0) {
 		atomic_set(&ok_to_sleep, 0);
+		atomic_set(&slate_is_spi_active, 1);
+		return ret;
+	}
 
 	(!atomic_read(&slate_is_spi_active)) ? pm_runtime_put_sync(&s_dev->dev)
 			: SLATECOM_INFO("spi is already active, skip put_sync...\n");

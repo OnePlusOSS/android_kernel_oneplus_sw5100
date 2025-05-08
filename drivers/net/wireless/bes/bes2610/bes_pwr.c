@@ -278,7 +278,8 @@ static bool bes_pwr_exist_vif_const_event(struct rwnx_hw *rwnx_hw)
 		if (idx >= NX_ITF_MAX)
 			continue;
 
-		if (rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
+		if (!rwnx_vif->in_csa && /* rwnx_vif->ch_index may be invalid in the CSA process */
+		    rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
 		    rwnx_vif->ch_index != RWNX_CH_NOT_SET && /* chanctx is already set */
 		    rwnx_hw->pwr.cur_chanctx < NX_CHAN_CTXT_CNT /* cur chanctx is valid */)
 			continue;
@@ -361,7 +362,8 @@ static bool bes_pwr_no_event_exist(struct rwnx_hw *rwnx_hw)
 		if (idx >= NX_ITF_MAX)
 			continue;
 
-		if (rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
+		if (!rwnx_vif->in_csa && /* rwnx_vif->ch_index may be invalid in the CSA process */
+		    rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
 		    rwnx_vif->ch_index != RWNX_CH_NOT_SET && /* chanctx is already set */
 		    rwnx_hw->pwr.cur_chanctx < NX_CHAN_CTXT_CNT /* cur chanctx is valid */)
 			continue;
@@ -610,7 +612,8 @@ static bool bes_pwr_update_delay_event_and_get_max_timeout(struct rwnx_hw *rwnx_
 				continue;
 			}
 
-			if (rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
+			if (!rwnx_vif->in_csa && /* rwnx_vif->ch_index may be invalid in the CSA process */
+			    rwnx_vif->ch_index != rwnx_hw->pwr.cur_chanctx && /* chanctx is equal */
 			    rwnx_vif->ch_index != RWNX_CH_NOT_SET && /* chanctx is already set */
 			    rwnx_hw->pwr.cur_chanctx < NX_CHAN_CTXT_CNT /* cur chanctx is valid */)
 				continue;
@@ -1366,6 +1369,18 @@ static void pwr_msg_rx_channel_switch_ind(struct rwnx_hw *rwnx_hw, struct ipc_e2
 	bool schdle = false;
 	unsigned long sched_time;
 	struct pwr_action_param action_param = {0};
+	int chan_idx = ((struct mm_channel_switch_ind *)msg->param)->chan_index;
+	bool roc_req = ((struct mm_channel_switch_ind *)msg->param)->roc;
+	bool roc_tdls = ((struct mm_channel_switch_ind *)msg->param)->roc_tdls;
+
+	/* Not allow to enter the low-power state
+	   when the ROC of the firmware level is currently in progress */
+	if ((chan_idx == CHAN_ROC_CTXT_IDX) && !roc_req && !roc_tdls &&
+	    !test_bit(RWNX_DEV_FW_LEVEL_ROC, &rwnx_hw->flags)) {
+		bes_pwr_set_busy_event_async(rwnx_hw, RWNX_INVALID_VIF, PHY_CONST_EVENT_ROC);
+	} else if (test_bit(RWNX_DEV_FW_LEVEL_ROC, &rwnx_hw->flags)) {
+		bes_pwr_clear_busy_event(rwnx_hw, RWNX_INVALID_VIF, PHY_CONST_EVENT_ROC);
+	}
 
 	spin_lock_bh(&rwnx_hw->pwr.pwr_lock);
 	rwnx_hw->pwr.cur_chanctx = ((struct mm_channel_switch_ind *)msg->param)->chan_index;

@@ -12,6 +12,9 @@
 #include "bes_eapol.h"
 #include "bes_log.h"
 #include "rwnx_msg_tx.h"
+#include "bes_pwr.h"
+
+#define BES_EAPOL_DEFERRED_TXQ_MAX_LEN	60
 
 /* bes_eapol_get_pkt_type() - Obtain the type of current EAPOL frame */
 enum msg_eapol_t bes_eapol_get_pkt_type(struct eapol_hdr *eapol)
@@ -129,14 +132,7 @@ void bes_tx_eapol_completion_notify(struct rwnx_sw_txhdr *sw_txhdr, struct tx_cf
 
 static void bes_eapol_sta_stored_key_free(struct rwnx_vif *rwnx_vif)
 {
-	struct bes_sta_stored_key *sta_stored_key;
-
-	if (RWNX_VIF_TYPE(rwnx_vif) != NL80211_IFTYPE_STATION &&
-	    RWNX_VIF_TYPE(rwnx_vif) != NL80211_IFTYPE_P2P_CLIENT) {
-		return;
-	}
-
-	sta_stored_key = &rwnx_vif->sta.sta_stored_key;
+	struct bes_sta_stored_key *sta_stored_key = &rwnx_vif->sta.sta_stored_key;
 
 	/* Free sta_vif or gc_vif's sta_stored_key */
 	if (sta_stored_key->key_param.key != NULL)
@@ -145,10 +141,79 @@ static void bes_eapol_sta_stored_key_free(struct rwnx_vif *rwnx_vif)
 	atomic_set(&sta_stored_key->defer_install, 0);
 }
 
+static void bes_eapol_send_deferred_skb(struct rwnx_vif *vif)
+{
+	struct rwnx_hw *rwnx_hw = vif->rwnx_hw;
+	struct sk_buff_head tmp_deferred_txq;
+	struct sk_buff *skb;
+	struct rwnx_sw_txhdr *sw_txhdr;
+	int ret = 0;
+	bes_dbg(BES_DBG_EAPOL, RWNX_FN_ENTRY_STR);
+
+	spin_lock_bh(&rwnx_hw->tx_lock);
+
+	/* Move all skb from deferred_txq to tmp_deferred_txq */
+	skb_queue_head_init(&tmp_deferred_txq);
+	spin_lock_bh(&vif->sta.deferred_txq.lock);
+	skb_queue_splice_init(&vif->sta.deferred_txq, &tmp_deferred_txq);
+	spin_unlock_bh(&vif->sta.deferred_txq.lock);
+
+	/* Queue skb to normal txq */
+	while ((skb = skb_dequeue(&tmp_deferred_txq)) != NULL) {
+		sw_txhdr = ((struct rwnx_txhdr *)skb->data)->sw_hdr;
+
+		bes_dbg(BES_DBG_EAPOL, "%s: send deferred skb, deferred_queue_len: %d\n",
+			__func__, skb_queue_len(&tmp_deferred_txq));
+		ret = rwnx_txq_queue_skb(skb, sw_txhdr->txq, rwnx_hw, false, NULL);
+		if (ret > 0 && bes_pwr_wifi_is_wake(rwnx_hw))
+			rwnx_hwq_process(rwnx_hw, sw_txhdr->txq->hwq);
+
+		if (ret < 0) {
+			skb_queue_head(&tmp_deferred_txq, skb);
+			break;
+		}
+	}
+	spin_unlock_bh(&rwnx_hw->tx_lock);
+
+	/* Clear left skb */
+	while ((skb = skb_dequeue(&tmp_deferred_txq)) != NULL) {
+		sw_txhdr = ((struct rwnx_txhdr *)skb->data)->sw_hdr;
+
+		kmem_cache_free(rwnx_hw->sw_txhdr_cache, sw_txhdr);
+		skb_pull(skb, RWNX_TX_HEADROOM);
+		dev_kfree_skb_any(skb);
+	}
+}
+
+static void bes_eapol_clear_deferred_skb(struct rwnx_vif *vif)
+{
+	struct rwnx_hw *rwnx_hw = vif->rwnx_hw;
+	struct sk_buff_head tmp_deferred_txq;
+	struct sk_buff *skb;
+	struct rwnx_sw_txhdr *sw_txhdr;
+	bes_dbg(BES_DBG_EAPOL, RWNX_FN_ENTRY_STR);
+
+	/* Move all skb from deferred_txq to tmp_deferred_txq */
+	skb_queue_head_init(&tmp_deferred_txq);
+	spin_lock_bh(&vif->sta.deferred_txq.lock);
+	skb_queue_splice_init(&vif->sta.deferred_txq, &tmp_deferred_txq);
+	spin_unlock_bh(&vif->sta.deferred_txq.lock);
+
+	/* Clear deferred skb */
+	while ((skb = skb_dequeue(&tmp_deferred_txq)) != NULL) {
+		sw_txhdr = ((struct rwnx_txhdr *)skb->data)->sw_hdr;
+
+		kmem_cache_free(rwnx_hw->sw_txhdr_cache, sw_txhdr);
+		skb_pull(skb, RWNX_TX_HEADROOM);
+		dev_kfree_skb_any(skb);
+	}
+}
+
 /**
  * @brief Install delayed key when MSG_4 send successfully
  */
-static void bes_eapol_key_install_defer_work(struct work_struct *work) {
+static void bes_eapol_key_install_defer_work(struct work_struct *work)
+{
 	struct rwnx_vif *vif = container_of(work, struct rwnx_vif,
 					    sta.sta_stored_key.key_install_defer_work);
 	struct rwnx_hw *rwnx_hw = vif->rwnx_hw;
@@ -183,11 +248,11 @@ static void bes_eapol_key_install_defer_work(struct work_struct *work) {
 				       sta_stored_key->key_param.key_idx,
 				       sta_stored_key->key_param.cipher_suite,
 				       &key_add_cfm))) {
-		bes_err(BES_DBG_EAPOL, "%s install delayed key error:%d", __func__, error);
+		bes_err(BES_DBG_EAPOL, "%s install delayed key error:%d\n", __func__, error);
 		goto free_stored_key;
 	}
 
-	bes_dbg(BES_DBG_EAPOL, "%s install delayed key successfully", __func__);
+	bes_dbg(BES_DBG_EAPOL, "%s install delayed key successfully\n", __func__);
 
 	if (key_add_cfm.status != 0) {
 		bes_err(BES_DBG_EAPOL, "%s: Status Error(%d)\n", __func__,(&key_add_cfm)->status);
@@ -202,6 +267,10 @@ free_stored_key:
 
 	bes_eapol_sta_stored_key_free(vif);
 	mutex_unlock(&sta_stored_key->mutex);
+
+	/* Send deferred skb if the key is valid */
+	if (rwnx_sta->key.valid)
+		bes_eapol_send_deferred_skb(vif);
 }
 
 void bes_eapol_sta_stored_key_init(struct rwnx_vif *rwnx_vif)
@@ -221,13 +290,70 @@ void bes_eapol_sta_stored_key_init(struct rwnx_vif *rwnx_vif)
 	atomic_set(&sta_stored_key->defer_install, 0);
 	INIT_WORK(&sta_stored_key->key_install_defer_work, bes_eapol_key_install_defer_work);
 	mutex_init(&sta_stored_key->mutex);
+
+	/* Init deferred_skb_queue to avoid sending data frame without encryption */
+	skb_queue_head_init(&rwnx_vif->sta.deferred_txq);
+}
+
+void bes_eapol_sta_stored_key_deinit(struct rwnx_vif *rwnx_vif)
+{
+	bes_eapol_cancel_key_install_defer_work(rwnx_vif);
+}
+
+/* Check whether the skb needs to be deferred, and if so, saves the skb to the deferred_txq */
+bool bes_eapol_defer_send_skb(struct sk_buff *skb)
+{
+	struct rwnx_sw_txhdr *sw_txhdr = ((struct rwnx_txhdr *)skb->data)->sw_hdr;
+	struct rwnx_sta *sta = sw_txhdr->rwnx_sta;
+	struct rwnx_vif *rwnx_vif = sw_txhdr->rwnx_vif;
+	int queue_len;
+
+	if (!sta || !rwnx_vif)
+		return false;
+
+	if (RWNX_VIF_TYPE(rwnx_vif) != NL80211_IFTYPE_STATION &&
+	    RWNX_VIF_TYPE(rwnx_vif) != NL80211_IFTYPE_P2P_CLIENT)
+		return false;
+
+	/* Don't defer EAPOL frame */
+	if (!(sw_txhdr->desc.api.host.flags & TXU_CNTRL_MGMT) &&
+	    __be16_to_cpu(sw_txhdr->desc.api.host.ethertype) == ETH_P_PAE)
+		return false;
+
+	/* Defer sending skb when sta/gc's pairwise key is invalid and in defer install procedure.
+	   Or defer sending skb if the deferred_txq is not empty to ensure the packets
+	   are sent in the order provided by the upper layer, avoiding out-of-order xmit. */
+	spin_lock_bh(&rwnx_vif->sta.deferred_txq.lock);
+	if ((atomic_read(&rwnx_vif->sta.sta_stored_key.defer_install) && !sta->key.valid) ||
+	    !skb_queue_empty(&rwnx_vif->sta.deferred_txq)) {
+		queue_len = skb_queue_len(&rwnx_vif->sta.deferred_txq);
+
+		/* Stop queue skb if the deferred_txq is too long */
+		if (queue_len >= BES_EAPOL_DEFERRED_TXQ_MAX_LEN) {
+			spin_unlock_bh(&rwnx_vif->sta.deferred_txq.lock);
+			bes_warn(BES_DBG_EAPOL, "%s: Cancel defer sending skb as deferred_txq is too long\n", __func__);
+			return false;
+		}
+
+		/* Queue skb to defered_txq */
+		__skb_queue_tail(&rwnx_vif->sta.deferred_txq, skb);
+		spin_unlock_bh(&rwnx_vif->sta.deferred_txq.lock);
+
+		bes_dbg(BES_DBG_EAPOL, "%s: Defer sending skb, deferred_queue_len: %d\n",
+			__func__, queue_len);
+		return true;
+	}
+	spin_unlock_bh(&rwnx_vif->sta.deferred_txq.lock);
+
+	return false;
 }
 
 /* In some cases, the operation of ADDKEY takes place before EAPOL is completed.
  * Causing EAPOL frames to be sent in encrypted form, solving these cases by storing
  * key, add key later when EAPOL_MSG_4 send successfully */
 bool bes_eapol_key_install_defer_store(struct rwnx_vif *vif, bool pairwise, u8 key_index,
-				       u8 cipher, struct key_params *params) {
+				       u8 cipher, struct key_params *params)
+{
 	struct bes_sta_stored_key *sta_stored_key;
 
 	if ((RWNX_VIF_TYPE(vif) != NL80211_IFTYPE_STATION &&
@@ -261,7 +387,8 @@ bool bes_eapol_key_install_defer_store(struct rwnx_vif *vif, bool pairwise, u8 k
 
 /* Cancel key_install_defer_work or wait it finish before deleting key to avoid
  * this work run after sta or gc delete key */
-void bes_eapol_cancel_key_install_defer_work(struct rwnx_vif *rwnx_vif) {
+void bes_eapol_cancel_key_install_defer_work(struct rwnx_vif *rwnx_vif)
+{
 	struct bes_sta_stored_key *sta_stored_key;
 
 	if (RWNX_VIF_TYPE(rwnx_vif) != NL80211_IFTYPE_STATION &&
@@ -278,6 +405,14 @@ void bes_eapol_cancel_key_install_defer_work(struct rwnx_vif *rwnx_vif) {
 
 	/* Cancel scheduled key_install_defer_work or wait running work finish */
 	cancel_work_sync(&sta_stored_key->key_install_defer_work);
+
+	/* Free Stored key */
+	mutex_lock(&sta_stored_key->mutex);
+	bes_eapol_sta_stored_key_free(rwnx_vif);
+	mutex_unlock(&sta_stored_key->mutex);
+
+	/* Clear deferred skb */
+	bes_eapol_clear_deferred_skb(rwnx_vif);
 
 	/* Clear sta and gc's eapol_status */
 	atomic_set(&rwnx_vif->sta.eapol_status, BES_EAPOL_NONE);

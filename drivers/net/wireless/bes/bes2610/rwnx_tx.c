@@ -1318,6 +1318,30 @@ free:
 	return NULL;
 }
 
+/* Check whether the skb should be deferred or queued for transmission. */
+static int rwnx_txq_queue_skb_with_defer_check(struct sk_buff *skb, struct rwnx_txq *txq, struct rwnx_hw *rwnx_hw,
+                                               bool retry, struct sk_buff *skb_prev)
+{
+	int ret = 0;
+	/* For STA and GC, if the pairwise key is in the defer install state and the port is
+	 * already authenticated, frames such as DHCP may be sent in an unencrypted form.
+	 * To address this issue, check whether the skb needs to be deferred,
+	 * and if so, saves the skb to the deferred_txq. */
+	if (bes_eapol_defer_send_skb(skb))
+		return 0;
+
+	/* If no deferral, proceed with TXQ enqueue */
+	spin_lock_bh(&rwnx_hw->tx_lock);
+	ret = rwnx_txq_queue_skb(skb, txq, rwnx_hw, false, NULL);
+
+	if (ret > 0 && bes_pwr_wifi_is_wake(rwnx_hw)) {
+		rwnx_hwq_process(rwnx_hw, txq->hwq);
+	}
+	spin_unlock_bh(&rwnx_hw->tx_lock);
+
+	return ret;
+}
+
 /**
  * netdev_tx_t (*ndo_start_xmit)(struct sk_buff *skb,
  *                               struct net_device *dev);
@@ -1445,16 +1469,9 @@ netdev_tx_t rwnx_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	txhdr->sw_hdr = sw_txhdr;
 
 	/* Queue the buffer */
-	spin_lock_bh(&rwnx_hw->tx_lock);
-	ret = rwnx_txq_queue_skb(skb, txq, rwnx_hw, false, NULL);
+	ret = rwnx_txq_queue_skb_with_defer_check(skb, txq, rwnx_hw, false, NULL);
 	if (sw_retxhdr)
-		ret += rwnx_txq_queue_skb(sw_retxhdr->skb, txq, rwnx_hw, false, NULL);
-
-	if (ret > 0 && bes_pwr_wifi_is_wake(rwnx_hw)) {
-		rwnx_hwq_process(rwnx_hw, txq->hwq);
-	}
-	spin_unlock_bh(&rwnx_hw->tx_lock);
-
+		ret += rwnx_txq_queue_skb_with_defer_check(sw_retxhdr->skb, txq, rwnx_hw, false, NULL);
 free:
 	bes_dbg(BES_DBG_TX, "%s %d. ret=%d,tid=%d, vif_index=%d,drv_vif_index=%d\n", __func__, __LINE__, ret, tid,
 		 rwnx_vif->vif_index, rwnx_vif->drv_vif_index);
@@ -1686,19 +1703,13 @@ int rwnx_start_mgmt_xmit(struct rwnx_vif *vif, struct rwnx_sta *sta, struct cfg8
 	txhdr->sw_hdr = sw_txhdr;
 
 	/* queue the buffer */
-	spin_lock_bh(&rwnx_hw->tx_lock);
-	ret = rwnx_txq_queue_skb(skb, txq, rwnx_hw, false, NULL);
-	if (ret > 0 && bes_pwr_wifi_is_wake(rwnx_hw)) {
-		rwnx_hwq_process(rwnx_hw, txq->hwq);
-	} else if (ret < 0) {
-		spin_unlock_bh(&rwnx_hw->tx_lock);
+	ret = rwnx_txq_queue_skb_with_defer_check(skb, txq, rwnx_hw, false, NULL);
+	if (ret < 0) {
 		kmem_cache_free(rwnx_hw->sw_txhdr_cache, sw_txhdr);
 		skb_pull(skb, RWNX_TX_HEADROOM);
 		dev_kfree_skb(skb);
 		ret = -EBUSY;
-		goto exit;
 	}
-	spin_unlock_bh(&rwnx_hw->tx_lock);
 
 exit:
 	bes_dbg(BES_DBG_TX, "%s ret=%d\n", __func__, ret);

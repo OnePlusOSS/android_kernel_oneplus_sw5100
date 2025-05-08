@@ -552,6 +552,7 @@ void geni_se_dump_dbg_regs(struct uart_port *uport)
 		     "dma_txirq_en:0x%x, dma_rxirq_en:0x%x geni_m_irq_en:0x%x geni_s_irq_en:0x%x\n",
 		     geni_dma_tx_irq_en, geni_dma_rx_irq_en, geni_m_irq_en,
 		     geni_s_irq_en);
+	mutex_unlock(&port->suspend_resume_lock);
 }
 
 int msm_geni_serial_resources_on(struct msm_geni_serial_port *port)
@@ -1361,6 +1362,7 @@ void msm_geni_serial_set_mctrl(struct uart_port *uport,
 		     "%s:%s, mctrl=0x%x, manual_rfr=0x%x, flow=%s\n",
 		     __func__, current->comm, mctrl, uart_manual_rfr,
 		     (port->manual_flow ? "OFF" : "ON"));
+	mutex_unlock(&port->suspend_resume_lock);
 }
 EXPORT_SYMBOL(msm_geni_serial_set_mctrl);
 
@@ -3817,8 +3819,10 @@ static void msm_geni_serial_flush(struct uart_port *uport)
 {
 	struct msm_geni_serial_port *port = GET_DEV_PORT(uport);
 
-	atomic_set(&port->flush_buffers, 1);
-	msm_geni_serial_stop_tx(uport);
+	if (port->ioctl_count) {
+		atomic_set(&port->flush_buffers, 1);
+		msm_geni_serial_stop_tx(uport);
+	}
 }
 
 static void msm_geni_serial_shutdown(struct uart_port *uport)

@@ -11,6 +11,8 @@
 #include <trace/hooks/bl_hib.h>
 #include <linux/blkdev.h>
 #include <linux/swap.h>
+
+
 #include <soc/qcom/qcom_hibernation.h>
 
 #define __NEW_UTS_LEN 64
@@ -68,4 +70,5 @@ static int __init init_s2d_hooks(void)
 
 module_init(init_s2d_hooks);
 MODULE_DESCRIPTION("Qualcomm Technologies, Inc. Bootloader Hibernation Vendor hooks");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
+

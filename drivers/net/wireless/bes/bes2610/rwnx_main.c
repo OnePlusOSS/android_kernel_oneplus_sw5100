@@ -78,7 +78,7 @@
 #define RW_DRV_DESCRIPTION "Bestechnic 11ax driver for Linux cfg80211"
 #define RW_DRV_COPYRIGHT "Copyright (C) Bestechnic 2015-2023"
 #define RW_DRV_AUTHOR "Bestechnic"
-#define STSTION_SCHED_SCAN_MAX 300
+#define STASTION_SCHED_SCAN_MAX 300
  
 static int rwnx_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev, struct cfg80211_mgmt_tx_params *params,
 					u64 *cookie);
@@ -1998,6 +1998,7 @@ static struct wireless_dev *rwnx_interface_add(struct rwnx_hw *rwnx_hw, const ch
 	vif->wdev.iftype = type;
 	vif->up = false;
 	vif->ch_index = RWNX_CH_NOT_SET;
+	vif->in_csa = false;
 	vif->generation = 0;
 	memset(&vif->net_stats, 0, sizeof(vif->net_stats));
 #ifdef CONFIG_BES_NAPI
@@ -2352,7 +2353,7 @@ int rwnx_cfg80211_sched_scan_start(struct wiphy *wiphy, struct net_device *dev,
 
 	bes_dbg(BES_DBG_SCHED_SCAN, "%s in.\n", __func__);
 
-	request->scan_plans[1].interval = STSTION_SCHED_SCAN_MAX ;
+	request->scan_plans[1].interval = STASTION_SCHED_SCAN_MAX ;
 	/* Show sched scan cfg */
 	bes_sched_scan_cfg_show(rwnx_hw, vif->vif_index, request);
 
@@ -5766,6 +5767,8 @@ static int rwnx_inetaddr_changed(struct notifier_block *nb, unsigned long event,
 	struct wireless_dev *wdev = ndev->ieee80211_ptr;
 	u8 vif_index;
 
+	bes_info(BES_DBG_FILTER_MANAGER, "%s event:%ld\n", __func__, event);
+
 	/* Make sure it's our interface that got changed and wifi is on */
 	if (!wdev || !rwnx_hw || wdev->wiphy != rwnx_hw->wiphy ||
 	    !rwnx_vif || !rwnx_vif->up)
@@ -5834,6 +5837,8 @@ static int rwnx_inet6addr_changed(struct notifier_block *nb, unsigned long event
 	struct rwnx_vif *rwnx_vif = netdev_priv(ndev);
 	struct wireless_dev *wdev = ndev->ieee80211_ptr;
 	u8 vif_index;
+
+	bes_info(BES_DBG_FILTER_MANAGER, "%s event:%ld\n", __func__, event);
 
 	/* Make sure it's our interface that got changed and wifi is on */
 	if (!wdev || !rwnx_hw || wdev->wiphy != rwnx_hw->wiphy ||

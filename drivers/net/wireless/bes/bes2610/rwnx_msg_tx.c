@@ -21,6 +21,9 @@
 #include "bes_pwr.h"
 #include "bes_vif_info.h"
 #include "bes_csi.h"
+#ifdef CONFIG_OPLUS_PLATFORM
+#include "oplus_custom_wlan.h"
+#endif
 
 const struct mac_addr mac_addr_bcst = {{0xFFFF, 0xFFFF, 0xFFFF}};
 
@@ -2279,19 +2282,29 @@ int rwnx_send_scanu_req(struct rwnx_hw *rwnx_hw, struct rwnx_vif *rwnx_vif, stru
 	if (param->duration_mandatory) {
 		req->duration = ieee80211_tu_to_usec(param->duration);
 	} else {
-		req->duration = rwnx_hw->conf_file.scan_active_dur;
+#ifdef CONFIG_OPLUS_PLATFORM
+		if (rwnx_vif->sta.ap != NULL)
+			req->duration = OPLUS_CONNECT_SCAN_DUR;
+		else
+#endif		
+			req->duration = rwnx_hw->conf_file.scan_active_dur;
 		req->ext.passive_duration = rwnx_hw->conf_file.scan_passive_dur;
 	}
 #else
-	req->duration = rwnx_hw->conf_file.scan_active_dur;
+#ifdef CONFIG_OPLUS_PLATFORM
+	if (rwnx_vif->sta.ap != NULL)
+		req->duration = OPLUS_CONNECT_SCAN_DUR;
+	else
+#endif
+		req->duration = rwnx_hw->conf_file.scan_active_dur;
 	req->ext.passive_duration = rwnx_hw->conf_file.scan_passive_dur;
 #endif
 
 	/* Use scan extend param to send probe request twice */
 	req->ext.probe_interval_us = NX_SCAN_PROBE_INTERVAL;
 	req->ext.max_probes        = NX_SCAN_PROBE_MAX_CNT;
-	bes_info(BES_DBG_MSG_TX, "%s probe interval(us):%d probe max cnt:%d.\n",
-		__func__, req->ext.probe_interval_us, req->ext.max_probes);
+	bes_info(BES_DBG_MSG_TX, "%s probe interval(us):%d probe max cnt:%d duration:%d.\n",
+		__func__, req->ext.probe_interval_us, req->ext.max_probes, req->duration);
 
 	if (req->ssid_cnt == 0)
 		chan_flags |= CHAN_NO_IR;
