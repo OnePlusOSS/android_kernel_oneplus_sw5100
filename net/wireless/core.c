@@ -216,7 +216,9 @@ static void cfg80211_rfkill_poll(struct rfkill *rfkill, void *data)
 {
 	struct cfg80211_registered_device *rdev = data;
 
+	wiphy_lock(&rdev->wiphy);
 	rdev_rfkill_poll(rdev);
+	wiphy_unlock(&rdev->wiphy);
 }
 
 void cfg80211_stop_p2p_device(struct cfg80211_registered_device *rdev,
@@ -368,12 +370,12 @@ static void cfg80211_sched_scan_stop_wk(struct work_struct *work)
 	rdev = container_of(work, struct cfg80211_registered_device,
 			   sched_scan_stop_wk);
 
-	rtnl_lock();
+	wiphy_lock(&rdev->wiphy);
 	list_for_each_entry_safe(req, tmp, &rdev->sched_scan_req_list, list) {
 		if (req->nl_owner_dead)
 			cfg80211_stop_sched_scan_req(rdev, req, false);
 	}
-	rtnl_unlock();
+	wiphy_unlock(&rdev->wiphy);
 }
 
 static void cfg80211_propagate_radar_detect_wk(struct work_struct *work)
@@ -885,6 +887,7 @@ int wiphy_register(struct wiphy *wiphy)
 			has_ap = iftd->types_mask & ap_bits;
 			has_non_ap = iftd->types_mask & ~ap_bits;
 
+#ifndef CFG80211_PROP_MULTI_LINK_SUPPORT
 			/*
 			 * For EHT 20 MHz STA, the capabilities format differs
 			 * but to simplify, don't check 20 MHz but rather check
@@ -894,6 +897,7 @@ int wiphy_register(struct wiphy *wiphy)
 			if (WARN_ON(iftd->eht_cap.has_eht &&
 				    has_ap && has_non_ap))
 				return -EINVAL;
+#endif /* CFG80211_PROP_MULTI_LINK_SUPPORT */
 		}
 
 		if (WARN_ON(!have_he && band == NL80211_BAND_6GHZ))
@@ -1283,7 +1287,7 @@ void __cfg80211_leave(struct cfg80211_registered_device *rdev,
 		break;
 	case NL80211_IFTYPE_AP:
 	case NL80211_IFTYPE_P2P_GO:
-		__cfg80211_stop_ap(rdev, dev, -1, true);
+		__cfg80211_stop_ap(rdev, dev, -1, true, NULL);
 		break;
 	case NL80211_IFTYPE_OCB:
 		__cfg80211_leave_ocb(rdev, dev);

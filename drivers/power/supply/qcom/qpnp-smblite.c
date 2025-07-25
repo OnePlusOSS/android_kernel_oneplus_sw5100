@@ -43,6 +43,10 @@ int DEBUG_TEMP = 200;//Attention:just for power-board
 static struct smb_charger *chg_oplus;
 int updatesoc = 0;
 int factoraging_control = 1;
+int avoidUnknownStatus = 0;
+static int CHGCNTMAX=10;
+bool USBONLINE = true;
+bool canTrigChg = false;
 EXPORT_SYMBOL(factoraging_control);
 int hvdcp_changed = 0;
 EXPORT_SYMBOL(hvdcp_changed);
@@ -325,6 +329,7 @@ static int smblite_chg_config_init(struct smblite *chip)
 	chg->param.icl_stat.reg = ICL_STATUS_REG(chg->base);
 	chg->param.aicl_5v_threshold.reg = USBIN_LV_AICL_THRESHOLD_REG(chg->base);
 	chip->chg.chg_param.smb_version = 0;
+
 	return rc;
 }
 
@@ -632,6 +637,7 @@ static int smblite_usb_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		rc = smblite_lib_get_usb_online(chg, val);
+		USBONLINE = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		rc = smblite_lib_get_prop_usb_voltage_now(chg, val);
@@ -849,17 +855,20 @@ void oplus_calibrate_fullsoc(struct smb_charger *chg, int *fullsoc) {
 		chg->ui_soc = *fullsoc;
 		return;
 	}
-	if ((chg->batt_status == POWER_SUPPLY_STATUS_FULL) && (chg->ui_soc < 100)) {
-		schedule_delayed_work(&chg->soc_work, msecs_to_jiffies(20000));//20s
+
+	if (chg->batt_status == POWER_SUPPLY_STATUS_FULL) {
+		if (chg->ui_soc< 100) {
+			schedule_delayed_work(&chg->soc_work, msecs_to_jiffies(20000));//20s
+		}
 		*fullsoc = chg->ui_soc;
 		return;
 	}
 
 	if ((chg->batt_status != POWER_SUPPLY_STATUS_CHARGING)) {
-		if ((chg->batt_vol <= 3360000) && (chg->ui_soc >= 0)) {
+		if ((chg->batt_vol <= UPPER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV) && (chg->ui_soc >= 0)) {
 			__pm_stay_awake(chg->smooth_soc);
 			schedule_delayed_work(&chg->soc_work, msecs_to_jiffies(5000));
-			if (chg->batt_vol <= 3260000)
+			if (chg->batt_vol <= LOWER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV)
 				chg->ui_soc--;
 			if (chg->ui_soc < 0)
 				chg->ui_soc = 0;
@@ -884,6 +893,16 @@ void sync_calibrate_soc(int *soccal) {
 	*soccal = (*soccal > 100) ? 100: *soccal;
 }
 extern bool smooth_soc;
+
+void enable_charge(struct smb_charger *chg, bool enable) {
+	if (enable) {
+		vote(chg->chg_disable_votable, USER_VOTER, false, 0);
+		factoraging_control = chg->charging_enabled = 1;
+	} else {
+		vote(chg->chg_disable_votable, USER_VOTER, true, 0);
+		factoraging_control = chg->charging_enabled = 0;
+	}
+}
 
 
 #define DEBUG_ACCESSORY_TEMP_DECIDEGC	250
@@ -916,6 +935,24 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_STATUS:
 		rc = smblite_lib_get_prop_batt_status(chg, val);
 		chg->batt_status = val->intval;
+
+		if (USBONLINE) {
+			if ((chg->batt_status) == POWER_SUPPLY_STATUS_UNKNOWN) {
+				if ((++avoidUnknownStatus) >= CHGCNTMAX) {
+					enable_charge(chg, false);
+					avoidUnknownStatus = 0;
+					canTrigChg = true;
+					pr_err("dischg for st=1 to trigger the status change");
+				}
+			} else if ((canTrigChg) && ((chg->batt_status) != POWER_SUPPLY_STATUS_CHARGING)) {
+				enable_charge(chg, true);
+				canTrigChg = false;
+				pr_err("enchg for st=1");
+			}
+		} else {
+			canTrigChg = false;
+			avoidUnknownStatus = 0;
+		}
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		rc = smblite_lib_get_prop_batt_health(chg, val);
@@ -935,15 +972,16 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		sync_calibrate_soc(&val->intval);
 		if (hvdcp_changed < 1)
 			break;
+		//as. 50->52; avoid ultralow vol,and vol rebound
 		if (((val->intval - chg->ui_soc) > 1) && (hvdcp_changed==2) &&
-				(chg->batt_vol > 3360000)) {  //only for. 24->26,75->77,avoid ultra low vol
+				(chg->batt_vol > (UPPER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV+ULTRA_LOW_VOL_STEP))) {
 			val->intval = ++(chg->ui_soc);
 			smooth_soc = false;
 			if (chg->batt_psy)
 				power_supply_changed(chg->batt_psy);
 			schedule_delayed_work(&chg->smooth_work, msecs_to_jiffies(1000));
 			break;
-		} else if (((chg->ui_soc - val->intval) > 1) && (hvdcp_changed==2)) { //only for. 26->24,77->75
+		} else if (((chg->ui_soc - val->intval) > 1) && (hvdcp_changed==2)) { ////as. 52->50
 			val->intval = --(chg->ui_soc);
 			smooth_soc = false;
 			if (chg->batt_psy)

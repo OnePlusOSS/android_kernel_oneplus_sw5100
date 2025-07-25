@@ -569,7 +569,6 @@ static DEVICE_ATTR_RW(debounce_us);
 static struct qpnp_pon_config *
 qpnp_get_cfg(struct qpnp_pon *pon, u32 pon_type);
 
-/* wsw.bsp.kernel,2019/12/30, export set pon debounce function */
 static inline void set_pon_debounce_ctl(struct qpnp_pon *pon, uint8_t val)
 {
 
@@ -584,7 +583,6 @@ static inline void set_pon_debounce_ctl(struct qpnp_pon *pon, uint8_t val)
 	}
 }
 
-/* wsw.bsp.kernel,2020/08/21, export disable pon key function */
 #define QPNP_PON_INT_POLARITY_HIGH(pon)		((pon)->base + 0x12)
 #define QPNP_PON_INT_POLARITY_LOW(pon)		((pon)->base + 0x13)
 

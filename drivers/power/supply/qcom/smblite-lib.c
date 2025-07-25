@@ -2388,7 +2388,12 @@ int smblite_lib_set_prop_current_max(struct smb_charger *chg,
 
 	if (chg->real_charger_type == QTI_POWER_SUPPLY_TYPE_USB_FLOAT) {
 
-		if ((val->intval == -ETIMEDOUT) || (val->intval == 2000)) {
+		if ((val->intval == 100000) || (val->intval == 2000)) {
+			pr_err("Float setI %d\n",val->intval);
+			return rc;
+		}
+
+		if (val->intval == -ETIMEDOUT) {
 			if ((chg->float_cfg & FLOAT_OPTIONS_MASK)
 						== FORCE_FLOAT_SDP_CFG_BIT) {
 				/*
@@ -2427,7 +2432,10 @@ int smblite_lib_set_prop_current_max(struct smb_charger *chg,
 				return rc;
 		}
 	} else if (chg->real_charger_type == POWER_SUPPLY_TYPE_USB) {
-
+		if (val->intval == 2000) {
+			pr_info("avoid toast twice for PC Port\n");
+			return rc;
+		}
 		rc = vote(chg->usb_icl_votable, USB_PSY_VOTER, true, val->intval);
 		if (rc < 0) {
 			pr_err("Couldn't vote ICL USB_PSY_VOTER rc=%d\n", rc);
@@ -4217,7 +4225,7 @@ static void soc_work(struct work_struct *work)
 	}
 
 	if ((chg->batt_status != POWER_SUPPLY_STATUS_CHARGING) && (chg->ui_soc > 0)
-		&& ((chg->batt_vol <= 3360000) || (chg->ui_soc >= chg->qbg_soc))) {
+		&& ((chg->batt_vol <= UPPER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV) || (chg->ui_soc >= chg->qbg_soc))) {
 		if (smooth_soc) {
 			smooth_soc = false;
 			chg->ui_soc--;

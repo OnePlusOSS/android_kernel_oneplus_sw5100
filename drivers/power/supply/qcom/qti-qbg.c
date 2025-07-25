@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"QBG_K: %s: " fmt, __func__
@@ -389,6 +389,67 @@ qbg_dbg(chip, QBG_DEBUG_STATUS, "msoc=%d sys_soc:%d charge_done:%d charge_status
 
 	return rc;
 }
+#if 0
+static void status_change_work(struct work_struct *work)
+{
+	struct qti_qbg *chip = container_of(work, struct qti_qbg,
+						status_change_work);
+	union power_supply_propval prop = {0, };
+	int rc, val, charger_present = 0;
+
+	if (!is_batt_available(chip))
+		return;
+
+	if (!is_usb_available(chip))
+		return;
+
+	rc = power_supply_get_property(chip->batt_psy,
+			POWER_SUPPLY_PROP_CHARGE_TYPE, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charge-type, rc=%d\n", rc);
+	else
+		chip->charge_type = prop.intval;
+
+	rc = power_supply_get_property(chip->batt_psy,
+			POWER_SUPPLY_PROP_STATUS, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charger status, rc=%d\n", rc);
+	else
+		chip->charge_status = prop.intval;
+
+	rc = qbg_read_iio_chan(chip, CHARGE_DONE, &val);
+	if (rc < 0)
+		pr_err("Failed to get charge done status, rc=%d\n", rc);
+	else
+		chip->charge_done = val;
+
+	rc = power_supply_get_property(chip->usb_psy,
+			POWER_SUPPLY_PROP_PRESENT, &prop);
+	if (rc < 0)
+		pr_err("Failed to get charger present, rc=%d\n", rc);
+	else
+		charger_present = prop.intval;
+
+	qbg_dbg(chip, QBG_DEBUG_STATUS, "charge_status=%d charge_done=%d charger_present:%d\n",
+			chip->charge_status, chip->charge_done, chip->charger_present);
+
+	/*
+	 * Set FCC and iterm back to default value on charger removal
+	 * as they could have been updated during recharge.
+	 */
+	if (chip->charger_present && !charger_present) {
+		qbg_notify_charger(chip);
+		chip->in_recharge = false;
+	}
+	chip->charger_present = charger_present;
+
+	rc = qbg_charge_full_update(chip);
+	if (rc < 0) {
+		pr_err("Failed in charge full update, rc=%d\n", rc);
+		return;
+	}
+}
+#endif
 
 static int qbg_get_max_fifo_count(struct qti_qbg *chip)
 {
@@ -847,6 +908,16 @@ static int qbg_clear_fifo_data(struct qti_qbg *chip)
 	return 0;
 }
 
+static int qbg_enable_data_full_int(struct qti_qbg *chip, bool enable)
+{
+	/* Writing 0x80 while FIFO is full will raise the interrupt */
+	u8 val = (enable ? 0x80 : 0x00);
+
+	return qbg_sdam_write(chip,
+			QBG_SDAM_BASE(chip, SDAM_CTRL0) + QBG_SDAM_INT_TEST1,
+			&val, 1);
+}
+
 static int qbg_init_sdam(struct qti_qbg *chip)
 {
 	int rc = 0;
@@ -971,6 +1042,7 @@ static int qbg_handle_fast_char(struct qti_qbg *chip)
 				}
 				chip->in_fast_char = false;
 			}
+
 			return 0;
 		}
 		else {
@@ -1668,7 +1740,11 @@ static int qbg_get_pon_reading(struct qti_qbg *chip, unsigned int *ocv,
 
 #define DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF	10
 #define DEFAULT_IGNORE_SHUTDOWN_SOC_SECS	600
+#define OCV_CIRCLEBATT_94PUV				(44000*10000)
+#define OCV_CIRCLEBATT_99PUV				(44610*10000)
+#define ONEDAY_SECOND					(24*60*60)
 
+extern unsigned int is_full_shutdown(void);
 static int qbg_determine_pon_soc(struct qti_qbg *chip)
 {
 	int rc, batt_temp;
@@ -1732,6 +1808,10 @@ static int qbg_determine_pon_soc(struct qti_qbg *chip)
 
 	time_diff = rtc_sec - (chip->essential_params).rtc_time;
 	temp_diff = abs(chip->pon_tbat - (chip->essential_params).batt_therm *10)/10;
+	if ((is_full_shutdown()) && (chip->pon_ocv > OCV_CIRCLEBATT_94PUV) && (time_diff < ONEDAY_SECOND)) {
+		chip->pon_ocv = OCV_CIRCLEBATT_99PUV;
+	}
+	pr_info("pon=%d OCV=%d tmdiff=%lus clikshud100=%d\n", pon_ocv, chip->pon_ocv, time_diff,is_full_shutdown());
 
 	if((temp_diff < DEFAULT_IGNORE_SHUTDOWN_TEMP_DIFF) && (time_diff < DEFAULT_IGNORE_SHUTDOWN_SOC_SECS)
 		&& ((chip->essential_params).rtc_time > 0) && ((chip->essential_params).full_soc > 0)) {
@@ -2670,6 +2750,18 @@ static int qbg_register_interrupts(struct qti_qbg *chip)
 	if (chip->battery_unknown || is_debug_batt_id(chip))
 		return rc;
 
+	/*
+	 * Turn off data full interrupt from PMIC side. After IRQ handler
+	 * registration, we re-enable the interrupt which guarantees the IRQ
+	 * handler will fire if the FIFO is already full.
+	 */
+	rc = qbg_enable_data_full_int(chip, false);
+	if (rc < 0) {
+		dev_err(chip->dev,
+			"Failed to disable interrupt from PMIC side, rc=%d\n",
+			rc);
+	}
+
 	rc = devm_request_threaded_irq(chip->dev, chip->irq, NULL,
 			qbg_data_full_irq_handler, IRQF_ONESHOT,
 			"qbg-sdam", chip);
@@ -2677,6 +2769,14 @@ static int qbg_register_interrupts(struct qti_qbg *chip)
 		dev_err(chip->dev, "Failed to request IRQ(qbg-sdam), rc=%d\n",
 			rc);
 		return rc;
+	}
+
+	/* Enable the interrupt, it will get raised if FIFO is already full */
+	rc = qbg_enable_data_full_int(chip, true);
+	if (rc < 0) {
+		dev_err(chip->dev,
+			"Failed to enable interrupt from PMIC side, rc=%d\n",
+			rc);
 	}
 
 	rc = enable_irq_wake(chip->irq);

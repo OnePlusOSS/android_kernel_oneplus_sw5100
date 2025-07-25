@@ -29,6 +29,15 @@ bcmdhd_wlan {
 #define DHD_DT_COMPAT_ENTRY		"android,bcmdhd_wlan"
 #define GPIO_WL_REG_ON_PROPNAME		"gpio_wl_reg_on"
 #define GPIO_WL_HOST_WAKE_PROPNAME	"gpio_wl_host_wake"
+#ifdef MATCH_OPLUS_PLATFORM
+#define NVRAM_PROPNAME            "nvram"
+#define FW_PROPNAME               "firmware"
+#endif
+#endif
+
+#ifdef MATCH_OPLUS_PLATFORM
+char custom_firmware_path[64] = CUSTOM_PRODUCT_NV_DIR;
+char custom_nvram_path[64] = CUSTOM_PRODUCT_NV_DIR;
 #endif
 
 static int
@@ -240,6 +249,10 @@ dhd_wlan_init_gpio(wifi_adapter_info_t *adapter)
 #ifdef BCMDHD_DTS
 	char wlan_node[32];
 	struct device_node *root_node = NULL;
+#ifdef MATCH_OPLUS_PLATFORM
+	int rc = 0;
+	const char *nv_path = NULL;
+#endif
 #endif
 	int err = 0;
 	int gpio_wl_reg_on = -1;
@@ -270,6 +283,15 @@ dhd_wlan_init_gpio(wifi_adapter_info_t *adapter)
 		gpio_wl_reg_on = of_get_named_gpio(root_node, GPIO_WL_REG_ON_PROPNAME, 0);
 #ifdef CUSTOMER_OOB
 		gpio_wl_host_wake = of_get_named_gpio(root_node, GPIO_WL_HOST_WAKE_PROPNAME, 0);
+#endif
+#ifdef MATCH_OPLUS_PLATFORM
+		rc = of_property_read_string_index(root_node, NVRAM_PROPNAME, 0, &nv_path);
+		if (rc || !nv_path) {
+			printf("%s: get custom nvram path fail\n", __FUNCTION__);
+		} else {
+			strncat(custom_nvram_path, nv_path, strlen(nv_path));
+			printf("%s: get custom nvram path ok %s\n", __FUNCTION__, custom_nvram_path);
+		}
 #endif
 	} else
 #endif

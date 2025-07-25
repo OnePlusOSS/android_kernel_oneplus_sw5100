@@ -12275,6 +12275,20 @@ int dhd_bus_get_fw_mode(dhd_pub_t *dhdp)
 }
 
 extern char * nvram_get(const char *name);
+
+#ifdef MATCH_OPLUS_PLATFORM
+extern char custom_firmware_path[];
+extern char custom_nvram_path[];
+static inline char* dhd_get_custom_nv_path(void)
+{
+	if (strlen(custom_nvram_path) > strlen(CUSTOM_PRODUCT_NV_DIR)) {
+		return custom_nvram_path;
+	} else {
+		return CUSTOM_PRODUCT_NV_DIR CUSTOM_PRODUCT_DEFAULT_NV;
+	}
+}
+#endif
+
 bool dhd_update_fw_nv_path(dhd_info_t *dhdinfo)
 {
 	int fw_len;
@@ -12317,6 +12331,10 @@ bool dhd_update_fw_nv_path(dhd_info_t *dhdinfo)
 #endif /* CONFIG_BCMDHD_NVRAM_PATH */
 #endif /* DHD_LINUX_STD_FW_API */
 //	}
+
+#ifdef MATCH_OPLUS_PLATFORM
+	nv = dhd_get_custom_nv_path();
+#endif
 
 	/* check if we need to initialize the path */
 	if (dhdinfo->fw_path[0] == '\0') {

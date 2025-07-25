@@ -2,7 +2,7 @@
 /*
  * Portions of this file
  * Copyright(c) 2016-2017 Intel Deutschland GmbH
- * Copyright (C) 2018, 2021-2022 Intel Corporation
+ * Copyright (C) 2018, 2021-2023 Intel Corporation
  */
 #ifndef __CFG80211_RDEV_OPS
 #define __CFG80211_RDEV_OPS
@@ -182,8 +182,10 @@ static inline int rdev_change_beacon(struct cfg80211_registered_device *rdev,
 	return ret;
 }
 
+#ifndef CFG80211_PROP_MULTI_LINK_SUPPORT
 static inline int rdev_stop_ap(struct cfg80211_registered_device *rdev,
-			       struct net_device *dev, unsigned int link_id)
+			       struct net_device *dev,
+			       unsigned int link_id)
 {
 	int ret;
 	trace_rdev_stop_ap(&rdev->wiphy, dev, link_id);
@@ -191,6 +193,19 @@ static inline int rdev_stop_ap(struct cfg80211_registered_device *rdev,
 	trace_rdev_return_int(&rdev->wiphy, ret);
 	return ret;
 }
+#else /* CFG80211_PROP_MULTI_LINK_SUPPORT */
+static inline int rdev_stop_ap(struct cfg80211_registered_device *rdev,
+			       struct net_device *dev,
+			       struct cfg80211_ap_settings *settings)
+{
+	int ret;
+
+	trace_rdev_stop_ap(&rdev->wiphy, dev, 0);
+	ret = rdev->ops->stop_ap(&rdev->wiphy, dev, settings);
+	trace_rdev_return_int(&rdev->wiphy, ret);
+	return ret;
+}
+#endif /* CFG80211_PROP_MULTI_LINK_SUPPORT */
 
 static inline int rdev_add_station(struct cfg80211_registered_device *rdev,
 				   struct net_device *dev, u8 *mac,
@@ -1441,8 +1456,8 @@ rdev_del_intf_link(struct cfg80211_registered_device *rdev,
 		   unsigned int link_id)
 {
 	trace_rdev_del_intf_link(&rdev->wiphy, wdev, link_id);
-	if (rdev->ops->add_intf_link)
-		rdev->ops->add_intf_link(&rdev->wiphy, wdev, link_id);
+	if (rdev->ops->del_intf_link)
+		rdev->ops->del_intf_link(&rdev->wiphy, wdev, link_id);
 	trace_rdev_return_void(&rdev->wiphy);
 }
 

@@ -94,6 +94,11 @@ unlock_and_exit:
 	return 0;
 }
 
+#ifdef CONFIG_OPLUS_CHARGING_MODIFY
+bool smooth_soc = true;
+EXPORT_SYMBOL(smooth_soc);
+#endif
+
 static int bcl_read_soc(void *data, int *val)
 {
 	static struct power_supply *batt_psy;
@@ -104,8 +109,14 @@ static int bcl_read_soc(void *data, int *val)
 	if (!batt_psy)
 		batt_psy = power_supply_get_by_name("battery");
 	if (batt_psy) {
+#ifdef CONFIG_OPLUS_CHARGING_MODIFY
+		smooth_soc = false;
+#endif
 		err = power_supply_get_property(batt_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &ret);
+#ifdef CONFIG_OPLUS_CHARGING_MODIFY
+		smooth_soc = true;
+#endif
 		if (err) {
 			pr_err("battery percentage read error:%d\n",
 				err);

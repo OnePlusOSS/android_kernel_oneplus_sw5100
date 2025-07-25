@@ -94,6 +94,7 @@ static uint uart_enable   = 0;
 static uint user_printk_disable_uart = 1;
 static uint is_user_build_variant = 0;
 static uint is_recovery_mode = 0;
+static uint clikshutdown = 0;
 
 
 /******************************************************************************/
@@ -124,6 +125,8 @@ MODULE_PARM_DESC(display_vflip, "Oplus Display Vflip");
 module_param(uart_enable, uint, 0444);
 MODULE_PARM_DESC(uart_enable, "Oplus Uart Enable");
 
+module_param(clikshutdown, uint, 0444);
+MODULE_PARM_DESC(clikshutdown, "Oplus shutdown at 100p");
 
 uint __always_inline get_oplus_hw_id(void)
 {
@@ -192,6 +195,13 @@ void  set_display_vflip(uint value)
 	return;
 }
 EXPORT_SYMBOL(set_display_vflip);
+
+uint __always_inline is_full_shutdown(void)
+{
+	return clikshutdown;
+}
+EXPORT_SYMBOL(is_full_shutdown);
+
 
 /******************************************************************************/
 #if 0

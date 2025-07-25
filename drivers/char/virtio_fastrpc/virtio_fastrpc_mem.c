@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "virtio_fastrpc_mem.h"
@@ -9,8 +9,9 @@
 #define MAX_CACHE_BUF_SIZE		(8*1024*1024)
 /* Maximum buffers cached in cached buffer list */
 #define MAX_CACHED_BUFS		32
+#define MAX_BUF_SIZE	0x78000000
 
-static inline void vfastrpc_free_pages(struct page **pages, int count)
+static inline void vfastrpc_free_pages(struct page **pages, unsigned int count)
 {
 	while (count--)
 		__free_page(pages[count]);
@@ -151,9 +152,12 @@ int vfastrpc_buf_alloc(struct vfastrpc_file *vfl, size_t size,
 	struct hlist_node *n;
 	int err = 0;
 
-	VERIFY(err, size > 0);
-	if (err)
+	VERIFY(err, size > 0 && size < MAX_BUF_SIZE);
+	if (err) {
+		dev_err(me->dev, "%s: Invalid buffer size, 0x%llx\n",
+				__func__, size);
 		goto bail;
+	}
 
 	if (!remote) {
 		/* find the smallest buffer that fits in the cache */
@@ -188,7 +192,7 @@ int vfastrpc_buf_alloc(struct vfastrpc_file *vfl, size_t size,
 	if (IS_ERR_OR_NULL(buf->pages)) {
 		err = -ENOMEM;
 		dev_err(me->dev,
-			"%s: %s: fastrpc_alloc_buffer failed for size 0x%zx, returned %ld\n",
+			"%s: %s: failed for size 0x%zx, returned %ld\n",
 			current->comm, __func__, size, PTR_ERR(buf->pages));
 		goto bail;
 	}
@@ -238,7 +242,9 @@ int vfastrpc_mmap_remove(struct vfastrpc_file *vfl, int fd,
 				 (map->refs == 2 &&
 				  map->attr & FASTRPC_ATTR_KEEP_MAP)) &&
 				/* Remove if only one reference map and no context map */
-				!map->ctx_refs) {
+				!map->ctx_refs &&
+				/* Remove map only if it isn't being used by DSP */
+				!map->dma_handle_refs) {
 			if (map->attr & FASTRPC_ATTR_KEEP_MAP)
 				map->refs--;
 			match = map;
@@ -291,21 +297,32 @@ void vfastrpc_mmap_free(struct vfastrpc_file *vfl,
 		dev_err(me->dev, "%s ADSP_MMAP_HEAP_ADDR is not supported\n",
 				__func__);
 	} else {
-		if (map->refs <= 0 || map->ctx_refs < 0) {
-			dev_warn(me->dev, "%s map refs = %d or ctx_refs = %d is abnormal\n",
-					__func__, map->refs, map->ctx_refs);
+		if (map->refs <= 0 || map->ctx_refs < 0 || map->dma_handle_refs < 0) {
+			dev_warn(me->dev,
+				"%s refs = %d ctx_refs = %d dma_handle_refs = %d is abnormal\n",
+				__func__, map->refs, map->ctx_refs, map->dma_handle_refs);
 			return;
 		}
 
 		map->refs--;
-		if ((map->refs || map->ctx_refs) && force_free) {
-			dev_warn(me->dev, "force free, refs = %d ctx_refs = %d attr = 0x%x\n",
-					map->refs + 1, map->ctx_refs, map->attr);
+		if (force_free) {
+			/*
+			 * We only allow force_free happen for DMA-BUF with FASTRPC_ATTR_KEEP_MAP
+			 * attribute set, because client could call remote_handle_close first,
+			 * then call rpcmem_free.
+			 */
+			if (map->refs || map->ctx_refs || map->dma_handle_refs ||
+					(map->refs == 0 && !(map->attr & FASTRPC_ATTR_KEEP_MAP)))
+				dev_warn(me->dev,
+					"force free, refs = %d ctx_refs = %d dma_handle_refs = %d attr = 0x%x\n",
+					map->refs + 1, map->ctx_refs, map->dma_handle_refs,
+					map->attr);
 			map->refs = 0;
 			map->ctx_refs = 0;
+			map->dma_handle_refs = 0;
 		}
 
-		if (!map->refs && !map->ctx_refs) {
+		if (!map->refs && !map->ctx_refs && !map->dma_handle_refs) {
 			hlist_del_init(&map->hn);
 			if (!IS_ERR_OR_NULL(map->table)) {
 				dma_buf_unmap_attachment(map->attach, map->table,

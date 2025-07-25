@@ -191,6 +191,7 @@ static struct cdev_info_list_unit g_cdev_info_list[] = {
     //{"mcu_upgrade",     9},
     //{"mcu_echo",        6},
     {"whs",             11},
+    {"audioh",          16},
 };
 
 #ifdef STAND_ALONE_USED
