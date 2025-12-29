@@ -1596,7 +1596,7 @@ static struct pinctrl_qup monaco_qup_regs[] = {
 };
 
 static const int monaco_reserved_gpios[] = {
-	0, 1, 2, 3, 9, 111, -1
+	-1
 };
 
 static const struct msm_gpio_wakeirq_map monaco_mpm_map[] = {

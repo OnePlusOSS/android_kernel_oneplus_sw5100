@@ -86,3 +86,11 @@ minidump.ko
 crypto-qti-common.ko
 crypto-qti-hwkm.ko
 hwkm_v1.ko
+buildvariant.ko
+oplusboot.ko
+oplus.ko
+oplus_project.ko
+boot_mode.ko
+oplus_switch.ko
+oplus_snshub.ko
+oplus_shutdown.ko

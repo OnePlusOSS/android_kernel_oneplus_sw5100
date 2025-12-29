@@ -27,6 +27,102 @@
 #include "schgm-flashlite.h"
 
 static struct power_supply_desc usb_psy_desc;
+struct smb_charger *smb_chg = NULL;
+
+extern unsigned int get_oplus_hw_id(void);
+extern int oplus_enter_shipmode(void);
+extern int oplus_enable_ship_mode_flag;
+extern int oplus_aging_ctl_chg_get(void);
+extern int oplus_aging_ctl_chg_set(int value);
+extern int oplus_batt_soc_get(void);
+extern int oplus_batt_soc_set(int value);
+
+bool sysmin_recovered = false;
+bool limit_maxvol = false;
+bool soc_updated = true;
+int DEBUG_TEMP = 200;//Attention:just for power-board
+static struct smb_charger *chg_oplus = NULL;
+int factoraging_control = 1;
+int avoidUnknownStatus = 0;
+static int CHGCNTMAX=10;
+bool USBONLINE = true;
+bool canTrigChg = false;
+EXPORT_SYMBOL(factoraging_control);
+bool charger_log_enable = false;
+module_param(charger_log_enable , bool, S_IRUGO | S_IWUSR);
+EXPORT_SYMBOL(charger_log_enable);
+int g_vbat_cutoff_uv = 3300000;
+EXPORT_SYMBOL(g_vbat_cutoff_uv);
+unsigned long suspend_time_sec = 0;
+int (*oplus_get_rtc_time)(unsigned long *rtc_time) = NULL;
+EXPORT_SYMBOL(oplus_get_rtc_time);
+int pre_android_soc = 0;
+EXPORT_SYMBOL(pre_android_soc);
+
+extern int force_active_set(void *data, u64 val);
+extern struct votable *g_usb_icl_votable;
+enum {
+	FACTORAGING_CONTROL_CHG_DISABLE = 0,
+	FACTORAGING_CONTROL_CHG_ENABLE = 1,
+	FACTORAGING_CONTROL_USB_ICL_DEFAULT = 2,
+	FACTORAGING_CONTROL_USB_ICL_FORCE_ACTIVE = 3,
+};
+
+typedef enum
+{
+	OSOC = 0,
+	OVOLT = 1,
+	OTEMP = 2,
+	OMAX =  3,
+} OPLUS_BATTERY;
+
+typedef struct
+{
+	int 	intval;
+} oplus_batt_para_s;
+
+static oplus_batt_para_s g_oplus_batt[OMAX] = {
+	[OSOC] =  {0},
+	[OVOLT] = {0},
+	[OTEMP] = {0},
+};
+
+void oplus_batt_para_update(OPLUS_BATTERY para, int value) {
+	g_oplus_batt[para].intval = value;
+	if (charger_log_enable)
+		pr_info("upate %d,value %d",para, g_oplus_batt[para].intval);
+}
+
+bool if_oplus_batt_para_changed(struct power_supply *psy){
+	int val = 0;
+
+	smblite_lib_get_prop_from_bms(chg_oplus, SMB5_QG_VOLTAGE_NOW, &val);
+	if (abs((g_oplus_batt[OVOLT].intval) - (val/1000)) > 5) {//5mv
+		oplus_batt_para_update(OVOLT, (val/1000));
+		return true;
+	} else {
+		smblite_lib_get_prop_from_bms(chg_oplus,SMB5_QG_TEMP, &val);
+		if (abs((g_oplus_batt[OTEMP].intval) - val) > 2) {//0.2deg+
+			oplus_batt_para_update(OTEMP, val);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void oplus_power_supply_changed(struct power_supply *psy) {
+	if (chg_oplus->batt_status != POWER_SUPPLY_STATUS_DISCHARGING) {//don't opti if charging
+		power_supply_changed(psy);
+		return;
+	} else if (if_oplus_batt_para_changed(psy)) {
+		power_supply_changed(psy);
+	}
+
+	return;
+}
+
+EXPORT_SYMBOL_GPL(oplus_power_supply_changed);
 
 static const struct smb_base_address smb_base[] = {
 	[PM2250] = {
@@ -155,6 +251,58 @@ struct smblite {
 
 static int __debug_mask;
 
+int high_temp = 0;
+EXPORT_SYMBOL(high_temp);
+bool ponsoc_inited = false;
+EXPORT_SYMBOL(ponsoc_inited);
+void sync_soc_ratio(int *soccal);
+extern void oplus_trigger_recharge(void);
+
+void oplus_init_ponsoc(int ponsoc)
+{
+	struct smb_charger *chg = NULL;
+
+	if (!chg_oplus) {
+		pr_err("oplus_init_ponsoc Invalid Pointer\n");
+		return;
+	}
+	chg = chg_oplus;
+
+	/*indicate the inhibit*/
+	if ((chg->batt_status == POWER_SUPPLY_STATUS_FULL)
+			&& (ponsoc < 100) && (!limit_maxvol)) {
+		pr_info("inhibit,force recharge");
+		oplus_trigger_recharge();
+		return;
+	}
+
+	mutex_lock(&chg->init_soc_lock);
+	sync_soc_ratio(&ponsoc);
+	chg->chip_soc = ponsoc;
+	chg->pre_chip_soc = chg->chip_soc;
+	if (!chg->mcu_soc_inited) {
+		init_pmic_ponsoc(chg);
+	}
+	ponsoc_inited = true;
+	/*start smooth ui_soc work*/
+	schedule_delayed_work(&chg->adjust_uisoc_work, 0);
+	mutex_unlock(&chg->init_soc_lock);
+}
+EXPORT_SYMBOL(oplus_init_ponsoc);
+
+extern unsigned int get_oplus_hw_id(void);
+bool isStarRiverWatch(void)
+{
+	return ((get_oplus_hw_id() == 6)||(get_oplus_hw_id() == 7));
+}
+EXPORT_SYMBOL_GPL(isStarRiverWatch);
+
+bool isAstraWatch(void)
+{
+	return ((get_oplus_hw_id() == 8)||(get_oplus_hw_id() == 9));
+}
+EXPORT_SYMBOL_GPL(isAstraWatch);
+
 static ssize_t weak_chg_icl_ua_show(struct device *dev, struct device_attribute
 				    *attr, char *buf)
 {
@@ -246,6 +394,11 @@ static int smblite_chg_config_init(struct smblite *chip)
 	return rc;
 }
 
+int aging_chg_ctl = 0;
+bool aging_ctl_inited = false;
+#define OPLUS_SELL_MAX_VOL				4050000
+int chg_limit_lcdon_i = 150000;
+EXPORT_SYMBOL(chg_limit_lcdon_i);
 #define MICRO_1P5A			1500000
 #define MICRO_P1A			100000
 #define MICRO_1PA			1000000
@@ -393,7 +546,10 @@ static int smblite_parse_dt_adc_channels(struct smb_charger *chg)
 					&chg->iio.usbin_v_chan);
 	if (rc < 0)
 		return rc;
-
+	rc = smblite_lib_get_iio_channel(chg, "usb_in_current",
+					&chg->iio.usbin_i_chan);
+	if (rc < 0)
+		return rc;
 	rc = smblite_lib_get_iio_channel(chg, "chg_temp",
 					&chg->iio.temp_chan);
 	if (rc < 0)
@@ -510,6 +666,7 @@ static enum power_supply_property smblite_usb_props[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
 };
 
 static enum power_supply_usb_type smblite_usb_psy_supported_types[] = {
@@ -530,11 +687,18 @@ static int smblite_usb_get_prop(struct power_supply *psy,
 	val->intval = 0;
 
 	switch (psp) {
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		rc = smblite_lib_read_usbin_current(chg, val);
+		if (charger_log_enable) {
+			__debug_mask = 0xFF;
+		}
+		break;
 	case POWER_SUPPLY_PROP_PRESENT:
 		rc = smblite_lib_get_prop_usb_present(chg, val);
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		rc = smblite_lib_get_usb_online(chg, val);
+		USBONLINE = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		rc = smblite_lib_get_prop_usb_voltage_now(chg, val);
@@ -671,7 +835,88 @@ static enum power_supply_property smblite_batt_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
+	POWER_SUPPLY_PROP_CHARGE_NOW,
+	POWER_SUPPLY_PROP_INPUT_POWER_LIMIT,
 };
+
+bool isSellMode(void)
+{
+	return (chg_oplus->chg_limit == CHG_LIMIT_SELLMODE);
+}
+EXPORT_SYMBOL(isSellMode);
+
+#define SOC_HOLD_TIMEOUT	(1000*60*5)	//5min
+static int pre_chg_status = 0;
+static int soc_before_linechange = 0;
+bool soc_line_changed = true;
+bool jiffestart =false;
+extern void notice_charging_time(struct smb_charger *chg, bool awake);
+
+void sync_soc_ratio(int *soccal)
+{
+	if ((*soccal == 0) || (!smb_chg))
+		return;
+
+	if (smb_chg->batt_status == POWER_SUPPLY_STATUS_CHARGING)
+	{
+		if (*soccal < 67) {
+			*soccal = ((*soccal * 107) / 100);
+		}
+		else if (*soccal < 76) {
+			*soccal = ((*soccal * 105) / 100);
+		}
+		else if (*soccal < 82) {
+			*soccal = ((*soccal * 103) / 100);
+		}
+		else if (*soccal < 91) {
+			*soccal = ((*soccal * 102) / 100);
+		}
+		else {
+			*soccal = (*soccal);
+		}
+	}else {
+		if (*soccal < 67) {
+			*soccal = ((*soccal * 107) / 100);
+		}
+		else if (*soccal < 73) {
+			*soccal = ((*soccal * 106) / 100);
+		}
+		else if (*soccal < 76) {
+			*soccal = ((*soccal * 105) / 100);
+		}
+		else if (*soccal < 82) {
+			*soccal = ((*soccal * 104) / 100);
+		}
+		else if (*soccal < 91) {
+			*soccal = ((*soccal * 103) / 100);
+		}
+		else {
+			*soccal = ((*soccal * 102) / 100);
+		}
+	}
+
+	*soccal = (*soccal > 100) ? 100: *soccal;
+
+	if (pre_chg_status != smb_chg->batt_status)
+	{
+		soc_line_changed = true;
+		soc_before_linechange = smb_chg->pre_chip_soc;
+	} else {
+		if ((soc_before_linechange - *soccal) != 1) //the soc gap between discharge and charging is 1
+			soc_line_changed = false;
+	}
+	pre_chg_status = smb_chg->batt_status;
+}
+
+void enable_charge(struct smb_charger *chg, bool enable) {
+	if (enable) {
+		vote(chg->chg_disable_votable, USER_VOTER, false, 0);
+		factoraging_control = chg->charging_enabled = 1;
+	} else {
+		vote(chg->chg_disable_votable, USER_VOTER, true, 0);
+		factoraging_control = chg->charging_enabled = 0;
+	}
+}
 
 #define DEBUG_ACCESSORY_TEMP_DECIDEGC	250
 static int smblite_batt_get_prop(struct power_supply *psy,
@@ -682,8 +927,45 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 	int rc = 0;
 
 	switch (psp) {
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		val->intval = chg->charging_enabled;
+		break;
+	case POWER_SUPPLY_PROP_INPUT_POWER_LIMIT:
+		if (!aging_ctl_inited) {
+			val->intval = aging_chg_ctl = oplus_aging_ctl_chg_get();
+			if(aging_chg_ctl) {
+				vote(chg->chg_disable_votable, USER_VOTER, true, 0);
+				rc = oplus_aging_ctl_chg_set(0);
+				if (rc < 0)
+					oplus_aging_ctl_chg_set(0);	//write twice if failed.
+			}
+			aging_ctl_inited = true;
+			pr_info("aging_chg_ctl %d\n",aging_chg_ctl);
+		} else {
+			val->intval = aging_chg_ctl;
+		}
+		break;
 	case POWER_SUPPLY_PROP_STATUS:
 		rc = smblite_lib_get_prop_batt_status(chg, val);
+		chg->batt_status = val->intval;
+
+		if (USBONLINE) {
+			if ((chg->batt_status) == POWER_SUPPLY_STATUS_UNKNOWN) {
+				if ((++avoidUnknownStatus) >= CHGCNTMAX) {
+					enable_charge(chg, false);
+					avoidUnknownStatus = 0;
+					canTrigChg = true;
+					pr_err("dischg for st=1 to trigger the status change");
+				}
+			} else if ((canTrigChg) && ((chg->batt_status) != POWER_SUPPLY_STATUS_CHARGING)) {
+				enable_charge(chg, true);
+				canTrigChg = false;
+				pr_err("enchg for st=1");
+			}
+		} else {
+			canTrigChg = false;
+			avoidUnknownStatus = 0;
+		}
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		rc = smblite_lib_get_prop_batt_health(chg, val);
@@ -696,6 +978,25 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		rc = smblite_lib_get_prop_batt_capacity(chg, val);
+		sync_soc_ratio(&val->intval);
+		chg->chip_soc = val->intval;
+		/*return ui_soc*/
+		if (ponsoc_inited) {
+			if ((chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) && (val->intval == 99) && (!jiffestart)) {//avoid 99 lasts for a long time
+				cancel_delayed_work_sync(&chg->soc_ratio_work);
+				schedule_delayed_work(&chg->soc_ratio_work, msecs_to_jiffies(SOC_HOLD_TIMEOUT));
+				notice_charging_time(chg, true);
+				jiffestart = true;
+				pr_info("starttime %d\n", chg->chip_soc);
+			}
+			if ((chg->batt_vol <= g_vbat_cutoff_uv + ULTRA_LOW_VOLTAGE_GAP_UV)
+				|| (chg->batt_status == POWER_SUPPLY_STATUS_FULL)
+				|| (chg->chip_soc != chg->pre_chip_soc)) {
+				cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+				schedule_delayed_work(&chg->adjust_uisoc_work, 0);
+			}
+			val->intval = chg->ui_soc;
+		}
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT:
 		rc = smblite_lib_get_prop_system_temp_level(chg, val);
@@ -706,6 +1007,11 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		rc = smblite_lib_get_prop_from_bms(chg,
 				SMB5_QG_VOLTAGE_NOW, &val->intval);
+		if ((sysmin_recovered == false) && (val->intval > 3600000)) {
+			smblite_lib_write(chg, 0x2640, 0x04);
+			sysmin_recovered = true;
+		}
+		chg->batt_vol = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		val->intval = get_client_vote(chg->fv_votable,
@@ -713,6 +1019,10 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
 		rc = smblite_lib_get_batt_current_now(chg, &val->intval);
+		if (charger_log_enable) {
+			pr_info("%s votefcc  %d\n", get_effective_client(chg->fcc_votable),
+						(get_effective_result_locked(chg->fcc_votable)));
+		}
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 		val->intval = get_client_vote(chg->fcc_votable,
@@ -725,11 +1035,11 @@ static int smblite_batt_get_prop(struct power_supply *psy,
 		rc = smblite_lib_get_prop_batt_iterm(chg, val);
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		if (chg->typec_mode == QTI_POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
+		if(chg->typec_mode == QTI_POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY)
 			val->intval = DEBUG_ACCESSORY_TEMP_DECIDEGC;
 		else
 			rc = smblite_lib_get_prop_from_bms(chg,
-						SMB5_QG_TEMP, &val->intval);
+					SMB5_QG_TEMP, &val->intval);
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
@@ -779,6 +1089,28 @@ static int smblite_batt_set_prop(struct power_supply *psy,
 	struct smb_charger *chg = power_supply_get_drvdata(psy);
 
 	switch (prop) {
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+		pr_info("set charging_enabled %d\n", val->intval);
+		if (val->intval == FACTORAGING_CONTROL_CHG_ENABLE) {
+			vote(chg->chg_disable_votable, USER_VOTER, false, 0);
+			factoraging_control = chg->charging_enabled = FACTORAGING_CONTROL_CHG_ENABLE;
+		} else if (val->intval == FACTORAGING_CONTROL_USB_ICL_DEFAULT) {
+			force_active_set((void *)(g_usb_icl_votable), 0);
+			factoraging_control = chg->charging_enabled = FACTORAGING_CONTROL_USB_ICL_DEFAULT;
+		} else if (val->intval == FACTORAGING_CONTROL_USB_ICL_FORCE_ACTIVE) {
+			force_active_set((void *)(g_usb_icl_votable), 1);
+			factoraging_control = chg->charging_enabled = FACTORAGING_CONTROL_USB_ICL_FORCE_ACTIVE;
+		} else {
+			vote(chg->chg_disable_votable, USER_VOTER, true, 0);
+			factoraging_control = chg->charging_enabled = FACTORAGING_CONTROL_CHG_DISABLE;
+		}
+		break;
+	case POWER_SUPPLY_PROP_INPUT_POWER_LIMIT:
+		oplus_aging_ctl_chg_set(val->intval);
+		mdelay(5);
+		aging_chg_ctl = oplus_aging_ctl_chg_get();
+		pr_info("set aging_chg_ctl %d,chg_sts only en->dis if TURE",aging_chg_ctl);
+		break;
 	case POWER_SUPPLY_PROP_STATUS:
 		rc = smblite_lib_set_prop_batt_status(chg, val);
 		break;
@@ -789,18 +1121,36 @@ static int smblite_batt_set_prop(struct power_supply *psy,
 		rc = smblite_lib_set_prop_batt_capacity(chg, val);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+		if(chg->chg_limit == CHG_LIMIT_SELLMODE) {
+			vote(chg->fv_votable, DEFAULT_VOTER, true, OPLUS_SELL_MAX_VOL);
+		} else {
+			vote(chg->fv_votable, DEFAULT_VOTER, false, 0);
+		}
 		chg->batt_profile_fv_uv = val->intval;
-		vote(chg->fv_votable, BATT_PROFILE_VOTER, true, val->intval);
+		vote(chg->fv_votable, BATT_PROFILE_VOTER, true, chg->batt_profile_fv_uv);
+		if (chg->batt_profile_fv_uv < 4460000)
+			limit_maxvol = true;
+		else
+			limit_maxvol = false;
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 		chg->batt_profile_fcc_ua = val->intval;
-		vote(chg->fcc_votable, BATT_PROFILE_VOTER, true, val->intval);
+		if(chg->chg_limit == CHG_LIMIT_LCDON)
+			vote(chg->fcc_votable, DEFAULT_VOTER, true, chg_limit_lcdon_i);
+		else if (chg->chg_limit == CHG_LIMIT_SELLMODE)
+			vote(chg->fcc_votable, DEFAULT_VOTER, true, DEFAULT_FCC_STEP_START_UA);
+		else {
+			vote(chg->fcc_votable, DEFAULT_VOTER, false, 0);
+			vote(chg->fcc_votable, BATT_PROFILE_VOTER, true, chg->batt_profile_fcc_ua);
+		}
+		if (charger_log_enable)
+			pr_info("chg_limit %d \n",chg->chg_limit);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
 		rc = smblite_lib_set_prop_input_suspend(chg, val->intval);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
-		rc = smblite_lib_set_prop_batt_iterm(chg, val->intval);
+		rc = smblite_lib_set_prop_batt_iterm(chg, (-1 * (val->intval)));
 		break;
 	default:
 		rc = -EINVAL;
@@ -821,6 +1171,8 @@ static int smblite_batt_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
+	case POWER_SUPPLY_PROP_CHARGE_NOW:
+	case POWER_SUPPLY_PROP_INPUT_POWER_LIMIT:
 	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
 		rc = 1;
 		break;
@@ -889,9 +1241,61 @@ static ssize_t boost_concurrent_mode_show(struct class *c, struct class_attribut
 	return scnprintf(buf, PAGE_SIZE, "%d\n", chg->concurrent_mode_status);
 }
 static CLASS_ATTR_RW(boost_concurrent_mode);
+static ssize_t chg_limit_store(struct class *c, struct class_attribute *attr,
+						const char *buf, size_t count)
+{
+	struct smb_charger *chg = container_of(c, struct smb_charger, qcom_class);
+	int val;
+
+	if (kstrtoint(buf, 0, &val))
+		return -EINVAL;
+
+	chg->chg_limit = val;
+	oplus_power_supply_changed(chg->batt_psy);
+	return count;
+}
+
+static ssize_t chg_limit_show(struct class *c, struct class_attribute *attr,
+						char *buf)
+{
+	struct smb_charger *chg = container_of(c, struct smb_charger, qcom_class);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", chg->chg_limit);
+}
+static CLASS_ATTR_RW(chg_limit);
+
+static ssize_t mcu_soc_store(struct class *c, struct class_attribute *attr,
+						const char *buf, size_t count)
+{
+	struct smb_charger *chg = container_of(c, struct smb_charger, qcom_class);
+	int val;
+
+	if (kstrtoint(buf, 0, &val))
+		return -EINVAL;
+
+	mutex_lock(&chg->init_soc_lock);
+	chg->mcu_soc = val;
+	if (!chg->mcu_soc_inited) {
+		init_mcu_soc(chg);
+	}
+	mutex_unlock(&chg->init_soc_lock);
+
+	return count;
+}
+
+static ssize_t mcu_soc_show(struct class *c, struct class_attribute *attr,
+						char *buf)
+{
+	struct smb_charger *chg = container_of(c, struct smb_charger, qcom_class);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", chg->mcu_soc);
+}
+static CLASS_ATTR_RW(mcu_soc);
 
 static struct attribute *qcom_class_attrs[] = {
 	&class_attr_boost_concurrent_mode.attr,
+	&class_attr_chg_limit.attr,
+	&class_attr_mcu_soc.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(qcom_class);
@@ -1192,6 +1596,10 @@ static int smblite_init_hw(struct smblite *chip)
 	if (chip->dt.no_battery)
 		chg->fake_capacity = 50;
 
+	smblite_lib_write(chg, 0x2655, 0x3F);
+	smblite_lib_write(chg, 0x2C9A, 0x26);
+	smblite_lib_write(chg, 0x2641, 0x03);
+	smblite_lib_write(chg, 0x2640, 0x02);
 	smblite_lib_get_charge_param(chg, &chg->param.aicl_5v_threshold,
 				&chg->default_aicl_5v_threshold_mv);
 	chg->aicl_5v_threshold_mv = chg->default_aicl_5v_threshold_mv;
@@ -1204,8 +1612,7 @@ static int smblite_init_hw(struct smblite *chip)
 	}
 
 	/* Enable HVDCP detection only for PM5100 targets */
-	if (chg->subtype == PM5100)
-		smblite_lib_hvdcp_detect_enable(chg, true);
+	smblite_lib_hvdcp_detect_enable(chg, false);
 
 	rc = schgm_flashlite_init(chg);
 	if (rc < 0) {
@@ -2118,7 +2525,7 @@ static int smblite_probe(struct platform_device *pdev)
 	if (!chip->iio_chan_ids)
 		return -ENOMEM;
 
-	chg = &chip->chg;
+	chg_oplus = chg = &chip->chg;
 	chg->iio_chans = chip->iio_chans;
 	chg->iio_chan_list_qg = NULL;
 	chg->dev = &pdev->dev;
@@ -2134,6 +2541,18 @@ static int smblite_probe(struct platform_device *pdev)
 		pr_err("parent regmap is missing\n");
 		return -EINVAL;
 	}
+	chg->chg_limit = 0;
+	chg->charging_enabled = 1;
+	chg->batt_status = 0;
+	chg->batt_vol = 0;
+	chg->ui_soc = oplus_batt_soc_get();
+	/*prevent bad values*/
+	chg->ui_soc = max(chg->ui_soc, 0);
+	chg->ui_soc = min(chg->ui_soc, 100);
+	pre_android_soc = chg->ui_soc;
+	chg->mcu_soc_inited = false;
+	chg->soc_update_jiffies = jiffies;
+	chg->vbat_uv_jiffies = jiffies;
 
 	rc = smblite_iio_init(chip, pdev, indio_dev);
 	if (rc < 0)
@@ -2285,6 +2704,12 @@ static void smblite_shutdown(struct platform_device *pdev)
 {
 	struct smblite *chip = platform_get_drvdata(pdev);
 	struct smb_charger *chg = &chip->chg;
+	mutex_lock(&chg->update_uisoc_lock);
+	oplus_batt_soc_set(chg->ui_soc);
+	mutex_unlock(&chg->update_uisoc_lock);
+	if(oplus_enable_ship_mode_flag) {
+		oplus_enter_shipmode();
+	}
 
 	/* disable all interrupts */
 	smblite_disable_interrupts(chg);
@@ -2423,12 +2848,24 @@ static int smblite_suspend(struct device *dev)
 		return smblite_freeze(dev);
 #endif
 
+	if (!oplus_get_rtc_time) {
+		return rc;
+	}
+
+	if (oplus_get_rtc_time(&suspend_time_sec)) {
+		pr_err("RTC read failed\n");
+		suspend_time_sec = -1;
+	}
+
 	return rc;
 }
 
 static int smblite_resume(struct device *dev)
 {
 	int rc = 0;
+	struct smblite *chip = dev_get_drvdata(dev);
+	struct smb_charger *chg = &chip->chg;
+	unsigned long resume_time_sec = 0;
 
 #ifdef CONFIG_DEEPSLEEP
 	if (pm_suspend_via_firmware()) {
@@ -2437,6 +2874,24 @@ static int smblite_resume(struct device *dev)
 			return rc;
 	}
 #endif
+
+	if (!oplus_get_rtc_time) {
+		return rc;
+	}
+
+	if (chg->ui_soc != chg->chip_soc) {
+		rc = oplus_get_rtc_time(&resume_time_sec);
+		if (rc || suspend_time_sec < 0) {
+			pr_err("RTC read failed\n");
+			chg->sleep_time_sec = 0;
+		}
+		else {
+			chg->sleep_time_sec += (resume_time_sec - suspend_time_sec);
+		}
+
+		cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+		schedule_delayed_work(&chg->adjust_uisoc_work, 0);
+	}
 
 	return rc;
 }

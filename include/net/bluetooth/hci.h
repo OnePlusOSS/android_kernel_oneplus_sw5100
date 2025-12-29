@@ -25,7 +25,7 @@
 #ifndef __HCI_H
 #define __HCI_H
 
-#define HCI_MAX_ACL_SIZE	1024
+#define HCI_MAX_ACL_SIZE	4080
 #define HCI_MAX_SCO_SIZE	255
 #define HCI_MAX_ISO_SIZE	251
 #define HCI_MAX_EVENT_SIZE	260

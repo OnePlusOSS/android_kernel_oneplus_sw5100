@@ -758,8 +758,8 @@ static void __qcom_glink_rx_done(struct qcom_glink *glink,
 
 	/* We don't send RX_DONE to intentless systems */
 	if (glink->intentless) {
-		kfree(intent->data);
-		kfree(intent);
+		//memset(intent->data, 0, intent->size);//move to before use
+		//memset(intent, 0, sizeof(*intent));
 		return;
 	}
 
@@ -1137,25 +1137,42 @@ static int qcom_glink_rx_data(struct qcom_glink *glink, size_t avail)
 		/* Drop the message */
 		goto advance_rx;
 	}
+	if (left_size)
 	CH_INFO(channel, "chunk_size:%d left_size:%d\n", chunk_size, left_size);
 
 	if (glink->intentless) {
 		/* Might have an ongoing, fragmented, message to append */
 		if (!channel->buf) {
-			intent = kzalloc(sizeof(*intent), GFP_ATOMIC);
-			if (!intent) {
-				qcom_glink_channel_ref_put(channel);
-				return -ENOMEM;
+
+			static size_t s_size = 0;
+			static void *sp_data = NULL;
+			static struct glink_core_rx_intent sst_rx_intent = {0};
+			intent = &sst_rx_intent;
+
+			memset((void *)&sst_rx_intent, 0, sizeof(sst_rx_intent));
+			if (unlikely(s_size < (chunk_size + left_size))) {
+				if (sp_data) {
+					kfree(sp_data);
+					sp_data = NULL;
+				}
+				GLINK_INFO(glink->ilc, "kmalloc(%d+%d)\n", chunk_size ,left_size);
+
+				sp_data = kmalloc(chunk_size + left_size, GFP_ATOMIC);
+				if (!sp_data) {
+					pr_err("%s():kzalloc intent->data failed, size %d+%d\n",
+						__func__, chunk_size, left_size);
+					return -ENOMEM;
+				}
+				s_size = chunk_size + left_size;
 			}
 
-			intent->data = kmalloc(chunk_size + left_size,
-					       GFP_ATOMIC);
-			if (!intent->data) {
-				kfree(intent);
-				qcom_glink_channel_ref_put(channel);
+			if (unlikely(!sp_data)) {
+				pr_err("%s():kzalloc intent->data is NULL, size %d+%d\n",
+					__func__, chunk_size, left_size);
 				return -ENOMEM;
 			}
-
+			memset(sp_data, 0, s_size);
+			intent->data = sp_data;
 			intent->id = 0xbabababa;
 			intent->size = chunk_size + left_size;
 			intent->offset = 0;

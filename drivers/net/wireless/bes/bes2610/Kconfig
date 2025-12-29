@@ -1,0 +1,9 @@
+config BES2610
+	tristate "BES2610 WLAN support"
+	select CFG80211
+	default m
+	help
+		This is an experimental driver for the bes2005 chip-set.
+		Enabling this option enables the generic driver without
+		any platform support.
+

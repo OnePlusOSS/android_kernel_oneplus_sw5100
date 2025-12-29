@@ -75,8 +75,8 @@ enum print_reason {
 #define USBIN_500UA     500000
 #define USBIN_900UA     900000
 #define SDP_CURRENT_UA			500000
-#define CDP_CURRENT_UA			1500000
-#define DCP_CURRENT_UA			1500000
+#define CDP_CURRENT_UA			1950000
+#define DCP_CURRENT_UA			1950000
 #define TYPEC_DEFAULT_CURRENT_UA	900000
 #define TYPEC_MEDIUM_CURRENT_UA		1500000
 #define TYPEC_HIGH_CURRENT_UA		3000000
@@ -85,6 +85,13 @@ enum print_reason {
 #define HVDCP3_STEP_SIZE_UV		200000
 #define PM5100_MAX_HVDCP3_PULSES	5
 #define PM5100_HVDCP3_MAX_VOLTAGE_UV	6000000
+
+#define RESUME_UPDATE_SOC_TIME_SEC                      (5) /*5s*/
+/* ultra-low voltage */
+#define ULTRA_LOW_VOLTAGE_GAP_UV			50000  /*50mV*/
+#define UPPER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV	3360000
+#define LOWER_LIMIT_OF_ULTRA_LOW_VOLTAGE_UV	3260000
+#define ULTRA_LOW_VOL_STEP	200000
 
 enum smb_mode {
 	PARALLEL_MASTER = 0,
@@ -254,11 +261,19 @@ struct parallel_params {
 struct smb_iio {
 	struct iio_channel	*temp_chan;
 	struct iio_channel	*usbin_v_chan;
+	struct iio_channel	*usbin_i_chan;
 };
 
 enum pmic_type {
 	PM2250,
 	PM5100,
+};
+
+enum {
+	CHG_LIMIT_NONE = 0,
+	CHG_LIMIT_LCDON = 1,
+	CHG_LIMIT_SELLMODE = 2,
+	CHG_LIMIT_MAX = 3,
 };
 
 struct smb_base_address {
@@ -295,7 +310,9 @@ struct smb_charger {
 	struct mutex		typec_lock;
 	struct mutex		dpdm_lock;
 	struct mutex		dpdm_pulse_lock;
-
+	struct mutex		init_soc_lock;
+	struct mutex		update_uisoc_lock;
+	struct wakeup_source    *charging_time;
 	/* power supplies */
 	struct power_supply		*batt_psy;
 	struct power_supply		*usb_psy;
@@ -338,6 +355,8 @@ struct smb_charger {
 	struct delayed_work	thermal_regulation_work;
 	struct delayed_work	role_reversal_check;
 	struct delayed_work	pr_swap_detach_work;
+	struct delayed_work	adjust_uisoc_work;
+	struct delayed_work	soc_ratio_work;
 
 	struct charger_param	chg_param;
 
@@ -408,6 +427,18 @@ struct smb_charger {
 	bool			flash_active;
 	u32			irq_status;
 	bool			is_fg_remote;
+	int 		chg_limit;
+	int 		charging_enabled;
+	int 		batt_status;
+	int 		batt_vol;
+	int			mcu_soc;
+	int			ui_soc;
+	int			chip_soc;
+	int			pre_chip_soc;
+	bool			mcu_soc_inited;
+	unsigned long			soc_update_jiffies;
+	unsigned long			vbat_uv_jiffies;
+	unsigned long			sleep_time_sec;
 };
 
 int smblite_lib_read(struct smb_charger *chg, u16 addr, u8 *val);
@@ -540,5 +571,8 @@ int smblite_lib_set_concurrent_config(struct smb_charger *chg, bool enable);
 bool is_concurrent_mode_supported(struct smb_charger *chg);
 void smblite_lib_hvdcp_detect_enable(struct smb_charger *chg, bool enable);
 int smblite_lib_rerun_apsd_if_required(struct smb_charger *chg);
-
+int smblite_lib_read_usbin_current(struct smb_charger *chg,
+					union power_supply_propval *val);
+void init_mcu_soc(struct smb_charger *chg);
+void init_pmic_ponsoc(struct smb_charger *chg);
 #endif /* __SMBLITE_LIB_H */

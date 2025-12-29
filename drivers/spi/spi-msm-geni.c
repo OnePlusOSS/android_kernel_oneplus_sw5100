@@ -22,10 +22,16 @@
 #include <linux/pinctrl/consumer.h>
 #include <soc/qcom/boot_stats.h>
 #include <linux/suspend.h>
+#include <linux/mutex.h>
+#ifdef CONFIG_OPLUS
+#include <linux/interconnect.h>
+#define DDR_QUP_VOTE            2092800
+//#define DDR_QUP_VOTE            1555000  /* 2Ghz vote. For 1.5 Ghz, set to 1500000. (value in Khz) */
+#endif
 
 #define SPI_NUM_CHIPSELECT	(4)
-#define SPI_XFER_TIMEOUT_MS	(250)
-#define SPI_AUTO_SUSPEND_DELAY	(250)
+#define SPI_XFER_TIMEOUT_MS	(50)
+#define SPI_AUTO_SUSPEND_DELAY	(30)
 #define SPI_XFER_TIMEOUT_OFFSET	(250)
 #define SPI_SLAVE_SYNC_XFER_TIMEOUT_OFFSET	(50)
 
@@ -199,6 +205,7 @@ struct spi_geni_master {
 	struct device *wrapper_dev;
 	int oversampling;
 	struct spi_geni_gsi *gsi, *gsi_lock_unlock;
+	struct mutex mutex;
 	struct dma_chan *tx;
 	struct dma_chan *rx;
 	struct msm_gpi_ctrl tx_event;
@@ -211,6 +218,7 @@ struct spi_geni_master {
 	int num_rx_eot;
 	int num_xfers;
 	bool is_xfer_in_progress;
+	bool is_shutdown_in_progress;
 	void *ipc;
 	bool gsi_mode; /* GSI Mode */
 	bool shared_ee; /* Dual EE use case */
@@ -218,6 +226,7 @@ struct spi_geni_master {
 	bool is_le_vm;	/* LE VM usecase */
 	bool is_la_vm;	/* LA VM property */
 	bool dis_autosuspend;
+	struct icc_path *icc_path;
 	bool cmd_done;
 	bool set_miso_sampling;
 	u32 miso_sampling_ctrl_val;
@@ -226,12 +235,35 @@ struct spi_geni_master {
 	bool slave_setup;
 	bool slave_state;
 	bool slave_cross_connected;
+	u32 oplus_auto_suspend_delay;
+	/* slave control callback */
+	void (*slave_ready_cb)(struct spi_device*, const void* tx, const void* rx);
 	bool master_cross_connect;
 	bool is_deep_sleep; /* For deep sleep restore the config similar to the probe. */
 	u32 xfer_timeout_offset;
 	bool is_dma_err;
 	bool is_dma_not_done;
 };
+
+typedef void (*slave_ready_cb_fn)(struct spi_device*, const void* tx, const void* rx);
+
+void oplus_spi_slave_ready_cb_register(
+	struct spi_device *spi, slave_ready_cb_fn slave_ready_cb)
+{
+	if (likely(spi)) {
+		struct spi_master *mas = spi->controller;
+		if (likely(mas)) {
+			struct spi_geni_master *sgm = spi_master_get_devdata(mas);
+			if (likely(sgm)) {
+				sgm->slave_ready_cb = slave_ready_cb;
+				return;
+			}
+		}
+	}
+	pr_err("%s(): slave_ready_cb set error \n", __func__);
+
+}
+EXPORT_SYMBOL(oplus_spi_slave_ready_cb_register);
 
 /**
  * geni_spi_se_dump_dbg_regs() - Print relevant registers that capture most
@@ -1199,6 +1231,15 @@ static int spi_geni_prepare_message(struct spi_master *spi,
 	struct spi_geni_master *mas = spi_master_get_devdata(spi);
 	int count;
 
+	SPI_LOG_DBG(mas->ipc, false, mas->dev, "%s: start.\n", __func__);
+
+	mutex_lock(&mas->mutex);
+
+	if (mas->is_shutdown_in_progress) {
+		mutex_unlock(&mas->mutex);
+		dev_err(mas->dev, "transfer in shutdown process.");
+		return -EINVAL;
+	}
 	if (mas->shared_ee) {
 		if (mas->setup) {
 			/* Client to respect system suspend */
@@ -1210,6 +1251,11 @@ static int spi_geni_prepare_message(struct spi_master *spi,
 			}
 
 			ret = pm_runtime_get_sync(mas->dev);
+			count = atomic_read(&mas->dev->power.usage_count);
+			SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s: pm_runtime_get_sync_1: %d, usage_count: %d.\n",
+				__func__, ret, count);
+
 			if (ret < 0) {
 				dev_err(mas->dev,
 					"%s:pm_runtime_get_sync failed %d\n",
@@ -1253,6 +1299,11 @@ static int spi_geni_prepare_message(struct spi_master *spi,
 		}
 
 		ret = pm_runtime_get_sync(mas->dev);
+		count = atomic_read(&mas->dev->power.usage_count);
+		SPI_LOG_DBG(mas->ipc, false, mas->dev,
+			"%s: pm_runtime_get_sync_2: %d, usage_count: %d.\n",
+			__func__, ret, count);
+
 		if (ret < 0) {
 			dev_err(mas->dev,
 			"%s:pm_runtime_get_sync failed %d\n", __func__, ret);
@@ -1281,6 +1332,9 @@ static int spi_geni_prepare_message(struct spi_master *spi,
 	}
 
 exit_prepare_message:
+	mutex_unlock(&mas->mutex);
+
+	SPI_LOG_DBG(mas->ipc, false, mas->dev, "%s: start.\n", __func__);
 	return ret;
 }
 
@@ -1289,6 +1343,8 @@ static int spi_geni_unprepare_message(struct spi_master *spi_mas,
 {
 	struct spi_geni_master *mas = spi_master_get_devdata(spi_mas);
 	int count = 0;
+
+	SPI_LOG_DBG(mas->ipc, false, mas->dev, "%s: start.\n", __func__);
 
 	mas->cur_speed_hz = 0;
 	mas->cur_word_len = 0;
@@ -1310,9 +1366,16 @@ static int spi_geni_unprepare_message(struct spi_master *spi_mas,
 				pm_runtime_enabled(mas->dev)) {
 			pm_runtime_mark_last_busy(mas->dev);
 			pm_runtime_put_autosuspend(mas->dev);
+			count = atomic_read(&mas->dev->power.usage_count);
+
+			SPI_LOG_DBG(mas->ipc, false, mas->dev,
+						"%s: pm_runtime_put_autosuspend, usage_count: %d.\n",
+						__func__, count);
+
 		}
 	}
 
+	SPI_LOG_DBG(mas->ipc, false, mas->dev, "%s: end.\n", __func__);
 	return 0;
 }
 
@@ -1533,6 +1596,10 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 	struct spi_geni_master *mas = spi_master_get_devdata(spi);
 	int ret = 0, count = 0;
 
+	if (mas->is_shutdown_in_progress) {
+		dev_err(mas->dev, "transfer in shutdown process.");
+		return ret;
+	}
 	/*
 	 * Not required for LE as below intializations are specific
 	 * to usecases. For LE, client takes care of get_sync.
@@ -1540,13 +1607,19 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 	if (mas->is_le_vm)
 		return 0;
 
-	 mas->is_xfer_in_progress = true;
+	mutex_lock(&mas->mutex);
+
+	SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s start.\n", __func__);
+
+	mas->is_xfer_in_progress = true;
 
 	/* Client to respect system suspend */
 	if (!pm_runtime_enabled(mas->dev)) {
 		SPI_LOG_ERR(mas->ipc, false, mas->dev,
 			"%s: System suspended\n", __func__);
 		mas->is_xfer_in_progress = false;
+		mutex_unlock(&mas->mutex);
 		return -EACCES;
 	}
 
@@ -1567,6 +1640,12 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 
 	if (!mas->setup || !mas->shared_ee) {
 		ret = pm_runtime_get_sync(mas->dev);
+		count = atomic_read(&mas->dev->power.usage_count);
+
+		SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s: pm_runtime_get_sync %d, usage_count: %d.\n",
+				__func__, ret, count);
+
 		if (ret < 0) {
 			dev_err(mas->dev,
 				"%s:pm_runtime_get_sync failed %d\n",
@@ -1576,6 +1655,7 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 			/* Set device in suspended since resume failed */
 			pm_runtime_set_suspended(mas->dev);
 			mas->is_xfer_in_progress = false;
+			mutex_unlock(&mas->mutex);
 			return ret;
 		}
 
@@ -1585,6 +1665,7 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 				SPI_LOG_ERR(mas->ipc, true, mas->dev,
 				"%s mas_setup failed: %d\n", __func__, ret);
 				mas->is_xfer_in_progress = false;
+				mutex_unlock(&mas->mutex);
 				return ret;
 			}
 		}
@@ -1597,7 +1678,9 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 				"resume usage count mismatch:%d", count);
 		}
 	}
-
+	mutex_unlock(&mas->mutex);
+	SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s end.\n", __func__);
 	return ret;
 }
 
@@ -1610,6 +1693,9 @@ static int spi_geni_unprepare_transfer_hardware(struct spi_master *spi)
 		mas->is_xfer_in_progress = false;
 		return 0;
 	}
+
+	SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s start.\n", __func__);
 
 	if (mas->gsi_mode) {
 		int ret = 0;
@@ -1635,9 +1721,16 @@ static int spi_geni_unprepare_transfer_hardware(struct spi_master *spi)
 			pm_runtime_enabled(mas->dev)) {
 		pm_runtime_mark_last_busy(mas->dev);
 		pm_runtime_put_autosuspend(mas->dev);
+		count = atomic_read(&mas->dev->power.usage_count);
+
+		SPI_LOG_DBG(mas->ipc, false, mas->dev,
+			"%s: pm_runtime_put_autosuspend, usage_count: %d.\n",
+			__func__, count);
 	}
 
 	mas->is_xfer_in_progress = false;
+	SPI_LOG_DBG(mas->ipc, false, mas->dev,
+				"%s end.\n", __func__);
 	return 0;
 }
 
@@ -1811,8 +1904,6 @@ static void handle_fifo_timeout(struct spi_master *spi,
 	}
 dma_unprep:
 	geni_spi_dma_unprepare(spi, xfer);
-	if (spi->slave && !mas->dis_autosuspend)
-		pm_runtime_put_sync_suspend(mas->dev);
 }
 
 static int spi_geni_transfer_one(struct spi_master *spi,
@@ -1828,11 +1919,18 @@ static int spi_geni_transfer_one(struct spi_master *spi,
 		return -EINVAL;
 	}
 
+	if (mas->is_shutdown_in_progress) {
+		dev_err(mas->dev, "transfer in shutdown process.");
+		return -EINVAL;
+	}
+
 	/* Check for zero length transfer */
 	if (xfer->len < 1) {
 		dev_err(mas->dev, "Zero length transfer\n");
 		return -EINVAL;
 	}
+
+	mutex_lock(&mas->mutex);
 
 	/* Double check PM status, client might have not taken wakelock and
 	 * continue to queue more transfers. Post auto-suspend, system suspend
@@ -1842,6 +1940,7 @@ static int spi_geni_transfer_one(struct spi_master *spi,
 	if (pm_runtime_status_suspended(mas->dev)) {
 		SPI_LOG_ERR(mas->ipc, true, mas->dev,
 			"%s: device is PM suspended\n", __func__);
+		mutex_unlock(&mas->mutex);
 		return -EACCES;
 	}
 
@@ -1872,6 +1971,11 @@ static int spi_geni_transfer_one(struct spi_master *spi,
 
 		if (spi->slave)
 			mas->slave_state = true;
+
+		if (mas->slave_ready_cb) {
+			mas->slave_ready_cb(slv, xfer->tx_buf, xfer->rx_buf);
+		}
+
 		timeout = wait_for_completion_timeout(&mas->xfer_done,
 					xfer_timeout);
 		if (spi->slave)
@@ -1959,15 +2063,18 @@ static int spi_geni_transfer_one(struct spi_master *spi,
 			}
 		}
 	}
+	mutex_unlock(&mas->mutex);
 	return ret;
 err_gsi_geni_transfer_one:
 	geni_spi_se_dump_dbg_regs(&mas->spi_rsc, mas->base, mas->ipc);
 	dmaengine_terminate_all(mas->tx);
 	if (mas->is_le_vm)
 		mas->le_gpi_reset_done = true;
+	mutex_unlock(&mas->mutex);
 	return ret;
 err_fifo_geni_transfer_one:
 	handle_fifo_timeout(spi, xfer);
+	mutex_unlock(&mas->mutex);
 	return ret;
 }
 
@@ -2170,6 +2277,7 @@ static void handle_dma_xfer(u32 dma_tx_status, u32 dma_rx_status, struct spi_gen
 			GENI_SE_DBG(mas->ipc, false, mas->dev,
 				     "%s: RX DMA done.\n", __func__);
 			if (dma_rx_len != dma_rx_len_in) {
+				if (!mas->slave_state) {
 				mas->rx_rem_bytes = dma_rx_len - dma_rx_len_in;
 				mas->is_dma_err = true;
 				GENI_SE_DBG(mas->ipc, false, mas->dev,
@@ -2177,6 +2285,12 @@ static void handle_dma_xfer(u32 dma_tx_status, u32 dma_rx_status, struct spi_gen
 					     __func__, mas->rx_rem_bytes,
 					     dma_tx_status, dma_rx_status);
 				geni_spi_se_dump_dbg_regs(&mas->spi_rsc, mas->base, mas->ipc);
+				} else {
+					GENI_SE_DBG(mas->ipc, false, mas->dev,
+					"%s:Data Less, rx_rem:(%d - %d), tx_irq_sts:0x%x rx_irq_sts:0x%x\n",
+					__func__, dma_rx_len, dma_rx_len_in, dma_tx_status, dma_rx_status);
+					mas->rx_rem_bytes = 0;
+				}
 			} else {
 				mas->rx_rem_bytes = 0;
 			}
@@ -2291,6 +2405,14 @@ static void spi_get_dt_property(struct platform_device *pdev,
 		dev_info(&pdev->dev, "%s: DT based xfer timeout offset: %d\n",
 			 __func__, geni_mas->xfer_timeout_offset);
 
+	of_property_read_u32(pdev->dev.of_node, "oplus,auto-suspend-delay",
+			     &geni_mas->oplus_auto_suspend_delay);
+	if (geni_mas->oplus_auto_suspend_delay)
+		dev_info(&pdev->dev, "%s: DT based auto suspend delay: %d\n",
+			 __func__, geni_mas->oplus_auto_suspend_delay);
+	else
+		geni_mas->oplus_auto_suspend_delay = SPI_AUTO_SUSPEND_DELAY;
+
 	spi->rt = of_property_read_bool(pdev->dev.of_node, "qcom,rt");
 
 	geni_mas->dis_autosuspend =
@@ -2385,6 +2507,13 @@ static int spi_geni_probe(struct platform_device *pdev)
 	if (of_property_read_bool(pdev->dev.of_node, "qcom,la-vm")) {
 		geni_mas->is_la_vm = true;
 		dev_info(&pdev->dev, "LA-VM usecase\n");
+	}
+
+	geni_mas->icc_path = of_icc_get(geni_mas->dev, "qup-memory");
+	if (IS_ERR(geni_mas->icc_path)) {
+		ret = PTR_ERR(geni_mas->icc_path);
+		dev_err(geni_mas->dev, "%s: error getting qup-memory interconnect ret: %d\n", __func__, ret);
+		geni_mas->icc_path = NULL;
 	}
 
 	geni_mas->wrapper_dev = dev->parent;
@@ -2537,16 +2666,17 @@ static int spi_geni_probe(struct platform_device *pdev)
 	init_completion(&geni_mas->xfer_done);
 	init_completion(&geni_mas->tx_cb);
 	init_completion(&geni_mas->rx_cb);
+	mutex_init(&geni_mas->mutex);
 	pm_runtime_set_suspended(&pdev->dev);
 	/* for levm skip auto suspend timer */
 	if (!geni_mas->is_le_vm && !geni_mas->dis_autosuspend) {
 		pm_runtime_set_autosuspend_delay(&pdev->dev,
-					SPI_AUTO_SUSPEND_DELAY);
+					geni_mas->oplus_auto_suspend_delay);
 		pm_runtime_use_autosuspend(&pdev->dev);
 	}
 	pm_runtime_enable(&pdev->dev);
 
-	geni_mas->ipc = ipc_log_context_create(4, dev_name(geni_mas->dev), 0);
+	geni_mas->ipc = ipc_log_context_create(8, dev_name(geni_mas->dev), 0);
 	if (!geni_mas->ipc && IS_ENABLED(CONFIG_IPC_LOGGING))
 		dev_err(&pdev->dev, "Error creating IPC logs\n");
 
@@ -2576,7 +2706,7 @@ static int spi_geni_probe(struct platform_device *pdev)
 			&dev_attr_spi_slave_state.attr);
 
 	geni_mas->is_xfer_in_progress = false;
-
+	geni_mas->is_shutdown_in_progress = false;
 	dev_info(&pdev->dev, "%s: completed %d\n", __func__, ret);
 	return ret;
 spi_geni_probe_err:
@@ -2588,6 +2718,7 @@ spi_geni_probe_err:
 static int spi_geni_remove(struct platform_device *pdev)
 {
 	int ret;
+	int count;
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct spi_geni_master *geni_mas = spi_master_get_devdata(master);
 
@@ -2600,6 +2731,9 @@ static int spi_geni_remove(struct platform_device *pdev)
 	spi_unregister_master(master);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+	count = atomic_read(&geni_mas->dev->power.usage_count);
+
+	SPI_LOG_ERR(geni_mas->ipc, false, geni_mas->dev, "%s. usage_count: %d.", __func__, count);
 	return ret;
 }
 
@@ -2698,6 +2832,12 @@ static int spi_geni_runtime_suspend(struct device *dev)
 			SPI_LOG_DBG(geni_mas->ipc, false, geni_mas->dev,
 			"%s failing at geni_icc_disable ret=%d\n", __func__, ret);
 		return ret;
+	} else if (geni_mas->icc_path) {
+		ret = icc_set_bw(geni_mas->icc_path, 0, 0);
+		if (ret) {
+			dev_err(&spi->dev, "%s: icc_set_bw(0,0) failed on path qup-ddr ret: %d\n", __func__, ret);
+			return ret;
+		}
 	}
 
 exit_rt_suspend:
@@ -2706,6 +2846,8 @@ exit_rt_suspend:
 	if (ret)
 		SPI_LOG_DBG(geni_mas->ipc, false, geni_mas->dev,
 		"%s failing at geni_icc_disable ret=%d\n", __func__, ret);
+
+	SPI_LOG_DBG(geni_mas->ipc, false, geni_mas->dev, "%s: %d end.\n", __func__, ret);
 
 	return ret;
 }
@@ -2782,6 +2924,12 @@ static int spi_geni_runtime_resume(struct device *dev)
 		}
 
 		return spi_geni_gpi_suspend_resume(geni_mas, false);
+	} else if (geni_mas->icc_path) {
+		ret = icc_set_bw(geni_mas->icc_path, 0, DDR_QUP_VOTE * DEFAULT_BUS_WIDTH);
+		if (ret) {
+			dev_err(&spi->dev, "%s: icc_set_bw() failed on path qup-ddr ret: %d\n", __func__, ret);
+			return ret;
+		}
 	}
 
 exit_rt_resume:
@@ -2832,6 +2980,9 @@ static int spi_geni_suspend(struct device *dev)
 			    __func__, ret);
 		return ret;
 	}
+
+	geni_mas->is_shutdown_in_progress = true;
+
 #ifdef CONFIG_DEEPSLEEP
 	if (pm_suspend_via_firmware()) {
 		SPI_LOG_ERR(geni_mas->ipc, true, dev,
@@ -2846,6 +2997,7 @@ static int spi_geni_suspend(struct device *dev)
 	}
 #endif
 	if (!pm_runtime_status_suspended(dev)) {
+		mutex_lock(&geni_mas->mutex);
 		if (list_empty(&spi->queue) && !spi->cur_msg) {
 			SPI_LOG_ERR(geni_mas->ipc, true, geni_mas->dev,
 					"%s: Force suspend", __func__);
@@ -2861,7 +3013,10 @@ static int spi_geni_suspend(struct device *dev)
 		} else {
 			ret = -EBUSY;
 		}
+		mutex_unlock(&geni_mas->mutex);
 	}
+
+	geni_mas->is_shutdown_in_progress = false;
 
 	return ret;
 }

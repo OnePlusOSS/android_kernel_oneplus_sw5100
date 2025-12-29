@@ -1,8 +1,19 @@
 load(":image_opts.bzl", "boot_image_opts")
 load(":msm_kernel_la.bzl", "define_msm_la")
 load(":target_variants.bzl", "la_variants")
+load(":msm_kernel_extensions.bzl", "get_kernel_modules_dir")
+
 
 target_name = "monaco"
+
+def get_monaco_ext_modules(msm_target, variant):
+    _monaco_ext_modules = [
+        # keep sorted
+    ]
+    if variant == "consolidate":
+        _monaco_ext_modules += [
+        ]
+    return _monaco_ext_modules
 
 def define_monaco():
     _monaco_in_tree_modules = [
@@ -28,28 +39,14 @@ def define_monaco():
         "drivers/dma/qcom/msm_gpi.ko",
         "drivers/firmware/qcom-scm.ko",
         "drivers/hwspinlock/qcom_hwspinlock.ko",
-        "drivers/hwtracing/coresight/coresight.ko",
-        "drivers/hwtracing/coresight/coresight-csr.ko",
-        "drivers/hwtracing/coresight/coresight-cti.ko",
-        "drivers/hwtracing/coresight/coresight-dummy.ko",
-        "drivers/hwtracing/coresight/coresight-funnel.ko",
-        "drivers/hwtracing/coresight/coresight-hwevent.ko",
-        "drivers/hwtracing/coresight/coresight-remote-etm.ko",
-        "drivers/hwtracing/coresight/coresight-replicator.ko",
-        "drivers/hwtracing/coresight/coresight-stm.ko",
-        "drivers/hwtracing/coresight/coresight-tgu.ko",
-        "drivers/hwtracing/coresight/coresight-tmc.ko",
-        "drivers/hwtracing/coresight/coresight-tpda.ko",
-        "drivers/hwtracing/coresight/coresight-tpdm.ko",
         "drivers/hwtracing/stm/stm_core.ko",
-        "drivers/hwtracing/stm/stm_ftrace.ko",
-        "drivers/hwtracing/stm/stm_p_ost.ko",
         "drivers/i2c/busses/i2c-msm-geni.ko",
         "drivers/i2c/busses/i2c-qcom-geni.ko",
+        "drivers/i2c/busses/i2c-gpio.ko",
+        "drivers/i2c/i2c-dev.ko",
         "drivers/iio/adc/qcom-spmi-adc5.ko",
         "drivers/iio/adc/qcom-spmi-adc5-gen3.ko",
         "drivers/iio/adc/qcom-vadc-common.ko",
-        "drivers/input/misc/qcom-hv-haptics.ko",
         "drivers/input/misc/qpnp-power-on.ko",
         "drivers/interconnect/icc-test.ko",
         "drivers/interconnect/qcom/icc-debug.ko",
@@ -71,6 +68,23 @@ def define_monaco():
         "drivers/mmc/host/sdhci-msm-scaling.ko",
         "drivers/nvmem/nvmem_qcom-spmi-sdam.ko",
         "drivers/nvmem/nvmem_qfprom.ko",
+        "drivers/oplus/net/oplus_link_power.ko",
+        "drivers/oplus/oplus_shutdown_detect.ko",
+        "drivers/oplus/boot/project_info/boot_mode.ko",
+        "drivers/oplus/startup_monitor/startup_monitor.ko",
+        "drivers/oplus/aw86927_haptic/haptic.ko",
+        "drivers/oplus/snshub/oplus_snshub.ko",
+        "drivers/oplus/oplus_crown/oplus_crown.ko",
+        "drivers/oplus/oplus_shutdown.ko",
+        "drivers/oplus/boot/cmdline_parser/oplus.ko",
+        "drivers/oplus/oplus_ddr_freq.ko",
+        "drivers/oplus/boot/oplus_project/oplus_project.ko",
+        "drivers/oplus/boot/cmdline_parser/oplusboot.ko",
+        "drivers/oplus/snshub/oplus_comm_master.ko",
+        "drivers/oplus/snshub/oplus_comm_master_bt.ko",
+        "drivers/oplus/oplus_switch.ko",
+        "drivers/oplus/boot/cmdline_parser/buildvariant.ko",
+        "drivers/oplus/bluesleep.ko",
         "drivers/phy/phy-xgene.ko",
         "drivers/pinctrl/qcom/pinctrl-monaco.ko",
         "drivers/pinctrl/qcom/pinctrl-msm.ko",
@@ -87,12 +101,10 @@ def define_monaco():
         "drivers/remoteproc/qcom_pil_info.ko",
         "drivers/remoteproc/qcom_q6v5.ko",
         "drivers/remoteproc/qcom_q6v5_pas.ko",
-        "drivers/remoteproc/qcom_rproc_slate.ko",
         "drivers/remoteproc/qcom_sysmon.ko",
         "drivers/remoteproc/rproc_qcom_common.ko",
         "drivers/rpmsg/qcom_glink.ko",
         "drivers/rpmsg/qcom_glink_rpm.ko",
-        "drivers/rpmsg/qcom_glink_slatecom.ko",
         "drivers/rpmsg/qcom_glink_smem.ko",
         "drivers/rpmsg/qcom_glink_spss.ko",
         "drivers/rpmsg/qcom_smd.ko",
@@ -136,12 +148,6 @@ def define_monaco():
         "drivers/soc/qcom/secure_buffer.ko",
         "drivers/soc/qcom/slate_events_bridge.ko",
         "drivers/soc/qcom/slate_events_bridge_rpmsg.ko",
-        "drivers/soc/qcom/slate_rsb.ko",
-        "drivers/soc/qcom/slatecom_event.ko",
-        "drivers/soc/qcom/slatecom_interface.ko",
-        "drivers/soc/qcom/slatecom_rpmsg.ko",
-        "drivers/soc/qcom/slatecom_spi.ko",
-        "drivers/soc/qcom/slatersb_rpmsg.ko",
         "drivers/soc/qcom/smem.ko",
         "drivers/soc/qcom/smp2p.ko",
         "drivers/soc/qcom/smp2p_sleepstate.ko",
@@ -184,11 +190,11 @@ def define_monaco():
         "net/qrtr/qrtr.ko",
         "net/qrtr/qrtr-smd.ko",
         "net/wireless/cfg80211.ko",
+        "drivers/net/wireless/bcmdhd/bcmdhd.ko",
     ]
 
     _monaco_consolidate_in_tree_modules = _monaco_in_tree_modules + [
         # keep sorted
-        "drivers/hwtracing/coresight/coresight-etm4x.ko",
         "drivers/misc/lkdtm/lkdtm.ko",
         "kernel/locking/locktorture.ko",
         "kernel/rcu/rcutorture.ko",
@@ -221,6 +227,7 @@ def define_monaco():
             msm_target = target_name,
             variant = variant,
             in_tree_module_list = mod_list,
+            ext_module_list = get_monaco_ext_modules(target_name, variant),
             boot_image_opts = boot_image_opts(
                 earlycon_addr = "qcom_geni,0x04a98000",
                 kernel_vendor_cmdline_extras = kernel_vendor_cmdline_extras,

@@ -1,0 +1,5 @@
+
+config OPLUS_NET_LINK_POWER
+	tristate "config oplus net linkpower"
+	help
+	  define this config to define LINK_POWER

@@ -1,0 +1,4 @@
+config OPLUS_CROWN
+	tristate "config oplus crown"
+	help
+	  define this config for oplus crown feature.

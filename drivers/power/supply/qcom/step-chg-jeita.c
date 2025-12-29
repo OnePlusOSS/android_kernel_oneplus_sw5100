@@ -1113,8 +1113,8 @@ int qcom_step_chg_init(struct device *dev, bool step_chg_enable,
 	chip->step_chg_config->param.psy_prop = POWER_SUPPLY_PROP_VOLTAGE_NOW;
 	chip->step_chg_config->param.iio_prop = STEP_QG_VOLTAGE_NOW;
 	chip->step_chg_config->param.prop_name = "VBATT";
-	chip->step_chg_config->param.rise_hys = 100000;
-	chip->step_chg_config->param.fall_hys = 100000;
+	chip->step_chg_config->param.rise_hys = 10000;
+	chip->step_chg_config->param.fall_hys = 10000;
 
 	chip->jeita_fcc_config = devm_kzalloc(dev,
 			sizeof(struct jeita_fcc_cfg), GFP_KERNEL);
@@ -1126,13 +1126,13 @@ int qcom_step_chg_init(struct device *dev, bool step_chg_enable,
 	chip->jeita_fcc_config->param.psy_prop = POWER_SUPPLY_PROP_TEMP;
 	chip->jeita_fcc_config->param.iio_prop = STEP_QG_TEMP;
 	chip->jeita_fcc_config->param.prop_name = "BATT_TEMP";
-	chip->jeita_fcc_config->param.rise_hys = 10;
-	chip->jeita_fcc_config->param.fall_hys = 10;
+	chip->jeita_fcc_config->param.rise_hys = 1;
+	chip->jeita_fcc_config->param.fall_hys = 1;
 	chip->jeita_fv_config->param.psy_prop = POWER_SUPPLY_PROP_TEMP;
 	chip->jeita_fv_config->param.iio_prop = STEP_QG_TEMP;
 	chip->jeita_fv_config->param.prop_name = "BATT_TEMP";
-	chip->jeita_fv_config->param.rise_hys = 10;
-	chip->jeita_fv_config->param.fall_hys = 10;
+	chip->jeita_fv_config->param.rise_hys = 1;
+	chip->jeita_fv_config->param.fall_hys = 1;
 
 	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
 	INIT_DELAYED_WORK(&chip->get_config_work, get_config_work);

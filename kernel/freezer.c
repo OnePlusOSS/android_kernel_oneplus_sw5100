@@ -11,7 +11,6 @@
 #include <linux/syscalls.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
-#include <linux/mmu_context.h>
 
 #undef CREATE_TRACE_POINT
 #include <trace/hooks/cgroup.h>
@@ -151,16 +150,9 @@ bool freeze_task(struct task_struct *p)
 void __thaw_task(struct task_struct *p)
 {
 	unsigned long flags;
-	const struct cpumask *mask = task_cpu_possible_mask(p);
 
 	spin_lock_irqsave(&freezer_lock, flags);
-	/*
-	 * Wake up frozen tasks. On asymmetric systems where tasks cannot
-	 * run on all CPUs, ttwu() may have deferred a wakeup generated
-	 * before thaw_secondary_cpus() had completed so we generate
-	 * additional wakeups here for tasks in the PF_FREEZER_SKIP state.
-	 */
-	if (frozen(p) || (frozen_or_skipped(p) && mask != cpu_possible_mask))
+	if (frozen(p))
 		wake_up_process(p);
 	spin_unlock_irqrestore(&freezer_lock, flags);
 }

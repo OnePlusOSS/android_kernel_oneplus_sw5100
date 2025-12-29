@@ -84,6 +84,7 @@
 #include "loop.h"
 
 #include <linux/uaccess.h>
+#include <trace/hooks/loop.h>
 
 #define LOOP_IDLE_WORKER_TIMEOUT (60 * HZ)
 #define LOOP_DEFAULT_HW_Q_DEPTH (128)

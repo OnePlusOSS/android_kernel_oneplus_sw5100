@@ -28,6 +28,8 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
+#include <linux/rtc.h>
+#include <linux/printk.h>
 
 #define PMIC_VER_8941				0x01
 #define PMIC_VERSION_REG			0x0105
@@ -99,6 +101,7 @@ enum qpnp_pon_version {
 #define QPNP_PON_SW_RST_GO(pon)			((pon)->base + 0x64)
 #define QPNP_PON_S3_SRC(pon)			((pon)->base + 0x74)
 #define QPNP_PON_S3_DBC_CTL(pon)		((pon)->base + 0x75)
+#define QPNP_PON_S3_PBS_DBC_CTL(pon)		((pon)->pbs_base + 0x75)
 #define QPNP_PON_SMPL_CTL(pon)			((pon)->base + 0x7F)
 #define QPNP_PON_TRIGGER_EN(pon)		((pon)->base + 0x80)
 #define QPNP_PON_XVDD_RB_SPARE(pon)		((pon)->base + 0x8E)
@@ -154,7 +157,8 @@ enum qpnp_pon_version {
 #define QPNP_PON_S1_TIMER_MAX			10256
 #define QPNP_PON_S2_TIMER_MAX			2000
 #define QPNP_PON_S3_TIMER_SECS_MAX		128
-#define QPNP_PON_S3_DBC_DELAY_MASK		0x07
+#define QPNP_PON_S3_DBC_DELAY_MASK		0x0F
+
 #define QPNP_PON_RESET_TYPE_MAX			0xF
 #define PON_S1_COUNT_MAX			0xF
 #define QPNP_PON_MIN_DBC_US			(USEC_PER_SEC / 64)
@@ -561,6 +565,165 @@ static ssize_t debounce_us_store(struct device *dev,
 	return size;
 }
 static DEVICE_ATTR_RW(debounce_us);
+
+static struct qpnp_pon_config *
+qpnp_get_cfg(struct qpnp_pon *pon, u32 pon_type);
+
+static inline void set_pon_debounce_ctl(struct qpnp_pon *pon, uint8_t val)
+{
+
+	if (!pon)
+		return;
+	if (is_pon_gen3(pon) && pon->pbs_base) {
+		qpnp_pon_masked_write(pon, QPNP_PON_PBS_DBC_CTL(pon),
+				QPNP_PON_DBC_DELAY_MASK(pon), val);
+	} else {
+		qpnp_pon_masked_write(pon, QPNP_PON_DBC_CTL(pon),
+				QPNP_PON_DBC_DELAY_MASK(pon), val);
+	}
+}
+
+#define QPNP_PON_INT_POLARITY_HIGH(pon)		((pon)->base + 0x12)
+#define QPNP_PON_INT_POLARITY_LOW(pon)		((pon)->base + 0x13)
+
+#define QPNP_PON_INT_EN_SET(pon)		((pon)->base + 0x15)
+#define QPNP_PON_INT_EN_CLR(pon)		((pon)->base + 0x16)
+
+static int pon_irq_status = -1;
+static int pon_rt_sts = 0;
+
+static inline int pon_hlos_int_mask_enable(struct device *dev, const u8 mask, bool en)
+{
+	struct qpnp_pon *pon = dev_get_drvdata(dev);
+	int rc;
+
+	if (!en) {
+		rc = regmap_write(pon->regmap, QPNP_PON_INT_EN_CLR(pon), mask);
+		if (rc) {
+			dev_err(dev, "disable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+
+		rc = qpnp_pon_masked_write(pon, QPNP_PON_INT_POLARITY_HIGH(pon), mask, 0);
+		if (rc) {
+			dev_err(dev, "disable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+
+		rc = qpnp_pon_masked_write(pon, QPNP_PON_INT_POLARITY_LOW(pon), mask, 0);
+		if (rc) {
+			dev_err(dev, "disable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+	} else {
+		rc = regmap_write(pon->regmap, QPNP_PON_INT_EN_SET(pon), mask);
+		if (rc) {
+			dev_err(dev, "enable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+
+		rc = qpnp_pon_masked_write(pon, QPNP_PON_INT_POLARITY_HIGH(pon), mask, mask);
+		if (rc) {
+			dev_err(dev, "disable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+
+		rc = qpnp_pon_masked_write(pon, QPNP_PON_INT_POLARITY_LOW(pon), mask, mask);
+		if (rc) {
+			dev_err(dev, "disable PON_KEY(0x%x) interrupt failed\n", mask);
+			return rc;
+		}
+	}
+	return 0;
+}
+
+static inline int pon_hlos_int_enable(struct device *dev, bool en)
+{
+	struct qpnp_pon *pon = dev_get_drvdata(dev);
+
+	int rc;
+	struct qpnp_pon_config *cfg = NULL;
+	u8 ponkeymask = 0;
+
+	cfg = qpnp_get_cfg(pon, PON_KPDPWR);
+	if (cfg) {
+		ponkeymask |= (is_pon_gen3(pon) ? QPNP_PON_GEN3_KPDPWR_N_SET : QPNP_PON_KPDPWR_N_SET);
+	}
+
+	cfg = qpnp_get_cfg(pon, PON_RESIN);
+	if (cfg) {
+		ponkeymask |= (is_pon_gen3(pon) ? QPNP_PON_GEN3_RESIN_N_SET : QPNP_PON_RESIN_N_SET);
+	}
+
+	if (0 == ponkeymask) {
+		pr_err("cfg is NULL\n");
+		return -ENXIO;
+	}
+
+	if (!en) {
+		if (pon_irq_status) {
+			/* disable pmic PON_KPDPWR interrupt */
+			pr_info("disable PON_KEY(0x%x) wake\n", ponkeymask);
+			rc = pon_hlos_int_mask_enable(dev, ponkeymask, false);
+			if (rc) {
+				return -EAGAIN;
+			}
+			pon_irq_status = 0;
+		}
+	} else {
+		if (!pon_irq_status) {
+			unsigned int value;
+			rc = regmap_read(pon->regmap, QPNP_PON_RT_STS(pon), &value);
+			if (!rc) {
+				pon_rt_sts = value & ponkeymask;
+				pr_info("pon_rt_sts(%x)\n", pon_rt_sts);
+			}
+
+			/* enable pmic PON_KPDPWR interrupt */
+			pr_info("enable PON_KEY(0x%x) wake\n", ponkeymask);
+			rc = pon_hlos_int_mask_enable(dev, ponkeymask, true);
+			if (rc) {
+				return -EAGAIN;
+			}
+			pon_irq_status = 1;
+		}
+	}
+	return 0;
+}
+
+
+static ssize_t qpnp_pon_disable_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, QPNP_PON_BUFFER_SIZE, "%d\n", !pon_irq_status);
+}
+
+static ssize_t qpnp_pon_disable_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	u32 value;
+	int rc;
+
+	if (unlikely(size > QPNP_PON_BUFFER_SIZE))
+		return -EINVAL;
+	if (unlikely(-1 == pon_irq_status))
+		return -EBUSY;
+
+	rc = kstrtou32(buf, 10, &value);
+	if (unlikely(rc))
+		return rc;
+
+	rc = pon_hlos_int_enable(dev, !value);
+
+	if (rc < 0) {
+		return rc;
+	}
+
+	return size;
+}
+
+static DEVICE_ATTR(disable_key, 0664, qpnp_pon_disable_show, qpnp_pon_disable_store);
 
 static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 				 enum pon_power_off_type type)
@@ -1043,6 +1206,17 @@ static int qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	 * Simulate a press event in case release event occurred without a press
 	 * event
 	 */
+
+	if (pon_rt_sts && ((PON_KPDPWR == cfg->pon_type) || (PON_RESIN == cfg->pon_type))) {
+		printk(KERN_ERR"pon_rt_sts is 0x%x, 0x%x\n", pon_rt_sts, pon_rt_bit);
+		pon_rt_sts &= ~pon_rt_bit;
+		//time diff ??
+		if (!cfg->old_state && !key_status) {
+			printk(KERN_ERR"Ignore this keypress\n");
+			return 0;
+		}
+	}
+
 	if (!cfg->old_state && !key_status) {
 		input_report_key(pon->pon_input, cfg->key_code, 1);
 		input_sync(pon->pon_input);
@@ -1793,6 +1967,7 @@ static int qpnp_pon_config_init(struct qpnp_pon *pon,
 			return rc;
 	}
 
+	pon_irq_status = 1;
 	device_init_wakeup(pon->dev, true);
 
 	return 0;
@@ -2345,6 +2520,74 @@ static int qpnp_pon_parse_dt_power_off_config(struct qpnp_pon *pon)
 	return 0;
 }
 
+static struct qpnp_pon *oplus_cap_pon;
+
+int oplus_aging_ctl_chg_get(void)
+{
+	uint reg;
+	int rc = 0;
+
+	if (!oplus_cap_pon)
+		return -ENODEV;
+
+	rc = regmap_read(oplus_cap_pon->regmap, 0x88F, &reg);
+	if (rc) {
+		dev_err(oplus_cap_pon->dev, "failed to read 0x88F, rc(%d)\n", rc);
+		return rc;
+	}
+
+	return (reg & BIT(0));
+}
+EXPORT_SYMBOL(oplus_aging_ctl_chg_get);
+
+int oplus_aging_ctl_chg_set(int value)
+{
+	int rc = 0;
+
+	if (!oplus_cap_pon)
+		return -ENODEV;
+
+	rc = regmap_write(oplus_cap_pon->regmap, 0x88F, value);
+	if (rc) {
+		dev_err(oplus_cap_pon->dev, "failed to write 0x88F, rc(%d)\n", rc);
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL(oplus_aging_ctl_chg_set);
+int oplus_batt_soc_get(void)
+{
+	uint reg;
+	int rc = 0;
+
+	if (!oplus_cap_pon)
+		return -ENODEV;
+
+	rc = regmap_read(oplus_cap_pon->regmap, 0x88D, &reg);
+	if (rc) {
+		dev_err(oplus_cap_pon->dev, "failed to read 0x88D, rc(%d)\n", rc);
+		return rc;
+	}
+
+	return (reg & 0xFF);
+}
+EXPORT_SYMBOL(oplus_batt_soc_get);
+int oplus_batt_soc_set(int value)
+{
+	int rc = 0;
+
+	if (!oplus_cap_pon)
+		return -ENODEV;
+
+	rc = regmap_write(oplus_cap_pon->regmap, 0x88D, value);
+	if (rc) {
+		dev_err(oplus_cap_pon->dev, "failed to write 0x88D, rc(%d)\n", rc);
+	}
+
+	return rc;
+}
+EXPORT_SYMBOL(oplus_batt_soc_set);
+
 static int qpnp_pon_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -2373,6 +2616,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 	pon->base = be32_to_cpu(*addr);
+	oplus_cap_pon = pon;
 
 	addr = of_get_address(dev->of_node, 1, NULL, NULL);
 	if (addr)
@@ -2480,6 +2724,13 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		return rc;
 	}
 
+	rc = device_create_file(dev, &dev_attr_disable_key);
+	if (rc) {
+		dev_err(dev, "sys file disable_key creation failed rc: %d\n", rc);
+		device_remove_file(dev, &dev_attr_debounce_us);
+		return rc;
+	}
+
 	if (sys_reset)
 		sys_reset_dev = pon;
 	if (modem_reset)
@@ -2508,6 +2759,44 @@ static int qpnp_pon_remove(struct platform_device *pdev)
 	mutex_destroy(&pon->restore_lock);
 
 	return 0;
+}
+
+static void pm_suspend_marker(char *annotation)
+{
+	struct timespec64 ts64;
+	struct rtc_time tm;
+
+	ktime_get_real_ts64(&ts64);
+	rtc_time64_to_tm(ts64.tv_sec, &tm);
+	pr_info("PM: suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
+			annotation, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour, tm.tm_min, tm.tm_sec, ts64.tv_nsec);
+}
+
+static int s_shipmode_shutdown = 0;
+void set_shipmode_shutdown(int shipmode_shutdown)
+{
+	s_shipmode_shutdown = !!shipmode_shutdown;
+}
+EXPORT_SYMBOL(set_shipmode_shutdown);
+
+static __inline__ int get_shipmode_shutdown(void)
+{
+	return s_shipmode_shutdown;
+}
+
+static void qpnp_pon_shutdown(struct platform_device *pdev)
+{
+	struct qpnp_pon *pon = platform_get_drvdata(pdev);
+	set_pon_debounce_ctl(pon, 0x0C); //set debounce 250ms
+	if (get_shipmode_shutdown()) {
+		//for debug, set s3 timer 4s
+		qpnp_pon_masked_write(pon, QPNP_PON_S3_PBS_DBC_CTL(pon), QPNP_PON_S3_DBC_DELAY_MASK, 0x0a);
+	} else {
+		//for debug, set s3 timer 16s
+		qpnp_pon_masked_write(pon, QPNP_PON_S3_PBS_DBC_CTL(pon), QPNP_PON_S3_DBC_DELAY_MASK, 0x0C);
+	}
+	pr_err("set kpd, s3 dbc");
 }
 
 #ifdef CONFIG_PM
@@ -2557,6 +2846,8 @@ static int qpnp_pon_restore(struct device *dev)
 
 static int qpnp_pon_suspend(struct device *dev)
 {
+	pm_suspend_marker("entry");
+
 #ifdef CONFIG_DEEPSLEEP
 	if (pm_suspend_via_firmware())
 		return qpnp_pon_free_all_irqs(dev);
@@ -2567,6 +2858,8 @@ static int qpnp_pon_suspend(struct device *dev)
 
 static int qpnp_pon_resume(struct device *dev)
 {
+	pm_suspend_marker("exit");
+
 #ifdef CONFIG_DEEPSLEEP
 	if (pm_suspend_via_firmware())
 		return qpnp_pon_restore(dev);
@@ -2597,6 +2890,7 @@ static struct platform_driver qpnp_pon_driver = {
 	},
 	.probe = qpnp_pon_probe,
 	.remove = qpnp_pon_remove,
+	.shutdown = qpnp_pon_shutdown,
 };
 
 static int __init qpnp_pon_init(void)

@@ -130,6 +130,7 @@ static int subsys_suspend(struct subsystem_data *ss_data, struct rproc *rproc, u
 	case SUBSYS_DEEPSLEEP:
 	case SUBSYS_HIBERNATE:
 		ss_data->ignore_ssr = true;
+
 #if IS_ENABLED(CONFIG_QCOM_DS_SKIP_Q6_STOP)
 		adsp_set_ops_stop(rproc, true);
 #endif
@@ -465,6 +466,7 @@ static void power_state_resume(void)
 		arm_smccc_smc(DS_ENTRY_SMC_ID, DS_NUM_PARAMETERS, DS_EXIT, 0, 0, 0, 0, 0, &res);
 		drv->deep_sleep_cnt += 1;
 	}
+
 }
 
 static int power_state_suspend(void)
@@ -479,6 +481,7 @@ static int power_state_suspend(void)
 
 	return 0;
 }
+
 
 static ssize_t deep_sleep_allowed_show(struct kobject *kobj, struct kobj_attribute *attr,
 				       char *buf)
@@ -626,6 +629,17 @@ exit:
 	unregister_chrdev_region(drv->ps_dev_no, 1);
 
 	return ret;
+
+	if (ret) {
+		kobject_put(drv->ps_kobj);
+		device_destroy(drv->ps_class, drv->ps_dev_no);
+		class_destroy(drv->ps_class);
+		cdev_del(&drv->ps_cdev);
+		unregister_chrdev_region(drv->ps_dev_no, 1);
+		return ret;
+	}
+
+	return 0;
 }
 
 static int power_state_probe(struct platform_device *pdev)
@@ -703,6 +717,7 @@ static int power_state_probe(struct platform_device *pdev)
 	ret = power_state_dev_init(drv);
 	if (ret)
 		goto remove_ss;
+
 
 	drv->ps_ops.suspend = power_state_suspend;
 	drv->ps_ops.resume = power_state_resume;

@@ -39,6 +39,20 @@
 				__func__, ##__VA_ARGS__);	\
 	} while (0)
 
+extern bool charger_log_enable;
+extern int CHG_I;
+extern int high_temp;
+static int oplus_bark_cnt = 0;
+extern void oplus_power_supply_changed(struct power_supply *psy);
+
+void notice_charging_time(struct smb_charger *chg, bool awake)
+{
+	if (awake)
+		__pm_stay_awake(chg->charging_time);
+	else
+		__pm_relax(chg->charging_time);
+}
+
 #define typec_rp_med_high(chg, typec_mode)			\
 	((typec_mode == QTI_POWER_SUPPLY_TYPEC_SOURCE_MEDIUM	\
 	|| typec_mode == QTI_POWER_SUPPLY_TYPEC_SOURCE_HIGH)	\
@@ -503,7 +517,7 @@ static const struct apsd_result *smblite_lib_update_usb_type(struct smb_charger 
 
 	smblite_update_usb_desc(chg);
 
-	smblite_lib_dbg(chg, PR_MISC, "APSD=%s, real_charger_type =%d\n",
+	pr_info("APSD=%s, real_charger_type =%d\n",
 			apsd_result->name, chg->real_charger_type);
 
 	return apsd_result;
@@ -543,6 +557,8 @@ static int smblite_lib_register_notifier(struct smb_charger *chg)
 
 bool is_concurrent_mode_supported(struct smb_charger *chg)
 {
+	if (chg->chg_limit == CHG_LIMIT_SELLMODE)
+		chg->concurrent_mode_supported = false;
 	return (chg->concurrent_mode_supported && chg->subtype == PM5100);
 }
 
@@ -608,6 +624,7 @@ static void smblite_lib_uusb_removal(struct smb_charger *chg)
 	/* Remove SW thermal regulation votes */
 	vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER, false, 0);
 	vote(chg->awake_votable, SW_THERM_REGULATION_VOTER, false, 0);
+	notice_charging_time(chg, false);
 
 	/* clear USB ICL vote for USB_PSY_VOTER */
 	rc = vote(chg->usb_icl_votable, USB_PSY_VOTER, false, 0);
@@ -1055,18 +1072,11 @@ int smblite_lib_get_prop_batt_status(struct smb_charger *chg,
 	stat = stat & BATTERY_CHARGER_STATUS_MASK;
 
 	if (!usb_online) {
-		switch (stat) {
-		case TERMINATE_CHARGE:
-		case INHIBIT_CHARGE:
-			val->intval = POWER_SUPPLY_STATUS_FULL;
-			break;
-		default:
-			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-			break;
-		}
+		val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		if (charger_log_enable)
+			pr_info("usb not online\n");
 		return rc;
 	}
-
 	switch (stat) {
 	case TRICKLE_CHARGE:
 	case PRE_CHARGE:
@@ -1189,6 +1199,17 @@ int smblite_lib_get_prop_batt_health(struct smb_charger *chg,
 				goto done;
 			}
 		}
+	}
+
+	rc = smblite_lib_read(chg, BATTERY_CHARGER_STATUS_1_REG(chg->base), &stat);
+	if (rc < 0) {
+		smblite_lib_err(chg, "Couldn't read BATTERY_CHARGER_STATUS_1_REG rc=%d\n",rc);
+		return rc;
+	}
+	if (stat & BIT(5)) {
+		val->intval = POWER_SUPPLY_HEALTH_SAFETY_TIMER_EXPIRE;
+		smblite_lib_dbg(chg, PR_REGISTER, "charge safety timer expired\n");
+		goto done;
 	}
 
 	rc = smblite_lib_read(chg, BATTERY_TEMP_STATUS_REG(chg->base), &stat);
@@ -1365,7 +1386,7 @@ int smblite_lib_get_batt_current_now(struct smb_charger *chg,
 	else
 		smblite_lib_err(chg, "Couldn't get current_now prop rc=%d\n",
 					rc);
-
+	CHG_I = *val;
 	return rc;
 }
 
@@ -1986,6 +2007,23 @@ static int smblite_lib_read_usbin_voltage_chan(struct smb_charger *chg,
 	return 0;
 }
 
+int smblite_lib_read_usbin_current(struct smb_charger *chg,
+				     union power_supply_propval *val)
+{
+	int rc;
+
+	if (!chg->iio.usbin_i_chan)
+		return -ENODATA;
+
+	rc = iio_read_channel_processed(chg->iio.usbin_i_chan, &val->intval);
+	if (rc < 0) {
+		smblite_lib_err(chg, "Couldn't read USBIN I channel rc=%d\n", rc);
+		return rc;
+	}
+
+	return 0;
+}
+
 int smblite_lib_get_prop_usb_voltage_now(struct smb_charger *chg,
 				    union power_supply_propval *val)
 {
@@ -2358,6 +2396,11 @@ int smblite_lib_set_prop_current_max(struct smb_charger *chg,
 			val->intval, chg->real_charger_type);
 
 	if (chg->real_charger_type == QTI_POWER_SUPPLY_TYPE_USB_FLOAT) {
+		if ((val->intval == 100000) || (val->intval == 2000)) {
+			pr_err("Float setI %d\n",val->intval);
+			return rc;
+		}
+
 		if (val->intval == -ETIMEDOUT) {
 			if ((chg->float_cfg & FLOAT_OPTIONS_MASK)
 						== FORCE_FLOAT_SDP_CFG_BIT) {
@@ -2397,7 +2440,10 @@ int smblite_lib_set_prop_current_max(struct smb_charger *chg,
 				return rc;
 		}
 	} else if (chg->real_charger_type == POWER_SUPPLY_TYPE_USB) {
-
+		if (val->intval == 2000) {
+			pr_info("avoid toast twice for PC Port\n");
+			return rc;
+		}
 		rc = vote(chg->usb_icl_votable, USB_PSY_VOTER, true, val->intval);
 		if (rc < 0) {
 			pr_err("Couldn't vote ICL USB_PSY_VOTER rc=%d\n", rc);
@@ -2480,8 +2526,9 @@ int smblite_lib_set_prop_ship_mode(struct smb_charger *chg,
 				const int val)
 {
 	int rc;
-
-	smblite_lib_dbg(chg, PR_MISC, "Set ship mode: %d!!\n", !!val);
+	extern void set_shipmode_shutdown(int shipmode_shutdown);
+	set_shipmode_shutdown(val);
+	pr_err("Set ship mode: %d!!\n", !!val);
 
 	rc = smblite_lib_masked_write(chg, SHIP_MODE_REG(chg->base), SHIP_MODE_EN_BIT,
 			!!val ? SHIP_MODE_EN_BIT : 0);
@@ -3215,14 +3262,22 @@ static void smblite_lib_usb_plugin_locked(struct smb_charger *chg)
 			smblite_lib_err(chg, "Couldn't to disable DPDM rc=%d\n", rc);
 	}
 
+	if (chg->chg_limit == CHG_LIMIT_SELLMODE) {
+		rc = smblite_lib_masked_write(chg, USB_CMD_PULLDOWN_REG(chg->base),
+									EN_PULLDOWN_USB_IN_BIT,
+									vbus_rising ? 0 : EN_PULLDOWN_USB_IN_BIT);
+		if (rc < 0)
+			smblite_lib_err(chg, "Couldn't configure pulldown on USB_IN rc=%d", rc);
+	}
+
 	if (chg->connector_type == QTI_POWER_SUPPLY_CONNECTOR_MICRO_USB)
 		smblite_lib_micro_usb_plugin(chg, vbus_rising);
 
 	vote(chg->temp_change_irq_disable_votable, DEFAULT_VOTER,
 						!vbus_rising, 0);
 	power_supply_changed(chg->usb_psy);
-	smblite_lib_dbg(chg, PR_INTERRUPT, "IRQ: usbin-plugin %s\n",
-					vbus_rising ? "attached" : "detached");
+
+	pr_info("IRQ: usbin-plugin %s\n",vbus_rising ? "attached" : "detached");
 }
 
 irqreturn_t smblite_usb_plugin_irq_handler(int irq, void *data)
@@ -3290,8 +3345,9 @@ static void update_sw_icl_max(struct smb_charger *chg,
 		 * limit ICL to 100mA, the USB driver will enumerate to check
 		 * if this is a SDP and appropriately set the current
 		 */
+
 		vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true,
-						USBIN_100UA);
+						CDP_CURRENT_UA);
 		break;
 	case POWER_SUPPLY_TYPE_UNKNOWN:
 	default:
@@ -3970,7 +4026,10 @@ irqreturn_t smblite_wdog_bark_irq_handler(int irq, void *data)
 	if (rc < 0)
 		smblite_lib_err(chg, "Couldn't pet the dog rc=%d\n", rc);
 
-	power_supply_changed(chg->batt_psy);
+	if (((++oplus_bark_cnt) % 3) == 0) {
+		oplus_bark_cnt = 0;
+		oplus_power_supply_changed(chg->batt_psy);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -4131,7 +4190,9 @@ static void bms_update_work(struct work_struct *work)
 	smblite_lib_suspend_on_debug_battery(chg);
 
 	if (chg->batt_psy)
-		power_supply_changed(chg->batt_psy);
+	{
+		oplus_power_supply_changed(chg->batt_psy);
+	}
 }
 
 static void smblite_lib_icl_change_work(struct work_struct *work)
@@ -4149,9 +4210,310 @@ static void smblite_lib_icl_change_work(struct work_struct *work)
 
 	power_supply_changed(chg->batt_psy);
 
-	smblite_lib_dbg(chg, PR_INTERRUPT, "icl_settled=%d\n", settled_ua);
+	if(charger_log_enable)
+		pr_info("icl_settled=%d\n", settled_ua);
 }
 
+
+/*****************************ui_soc update work*******************************/
+extern int oplus_batt_soc_set(int value);
+static void update_uisoc(struct smb_charger *chg, int soc)
+{
+	if (chg->ui_soc == soc)
+		return;
+
+	mutex_lock(&chg->update_uisoc_lock);
+	chg->ui_soc = soc;
+	chg->soc_update_jiffies = jiffies;
+	if (charger_log_enable) {
+		pr_info("update ui_soc=%d, jiffies=%lu\n", soc, jiffies_to_msecs(jiffies));
+	}
+	oplus_batt_soc_set(chg->ui_soc);
+	if (chg->batt_psy) {
+		power_supply_changed(chg->batt_psy);
+	}
+	mutex_unlock(&chg->update_uisoc_lock);
+}
+
+#define UPDATE_WORK_INTERVAL                            (1 * HZ) /* 1s */
+#define SOC_DOWN_INTERVAL_SI630MAH                      (10 * HZ) /* 10s */
+#define SOC_DOWN_INTERVAL_345MAH                        (5 * HZ) /*5s*/
+#define SOC_UP_INTERVAL                                 (5 * HZ) /*5s*/
+#define CHARGE_LOW_VOLTAGE_INTERVAL                     (10 * HZ) /*10s*/
+#define DISCHARGE_LOW_VOLTAGE_INTERVAL                  (5 * HZ) /*5s*/
+#define UTRAL_VOLTAGE_INTERVAL                          (1 * HZ) /*1s*/
+#define CHARGE_SLEEP_TIME_SEC                           (36) /*36s*/
+#define DISCHARGE_SLEEP_TIME_SI630MAH_SEC               (157 * 60) /*157min*/
+#define DISCHARGE_SLEEP_TIME_345MAH_SEC                 (86 * 60) /*86min*/
+#define SWITCH_BAND_MODE_SOC_PCT                        (15) /*15 !!!check each project*/
+
+extern bool isStarRiverWatch(void);
+extern bool isSellMode(void);
+extern int g_vbat_cutoff_uv;
+extern bool soc_line_changed;
+static void adjust_uisoc_work(struct work_struct *work)
+{
+	struct smb_charger *chg = container_of(work, struct smb_charger, adjust_uisoc_work.work);
+	int ui_soc;
+	int soc_update_gap = 0;
+	int soc_gap = 0;
+	int soc_margin = 0;
+	unsigned long soc_up_jiffies, soc_down_jiffies, vbat_uv_jiffies;
+	unsigned long low_vol_interval;
+	unsigned long update_delay = 0;
+	unsigned long tmp;
+	bool charging, full;
+	bool ui_soc_update = false;
+	bool force_down = false;
+	unsigned long soc_down_interval;
+	unsigned long discharge_sleep_time;
+
+	charging = (chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) ? true : false;
+	full = (chg->batt_status == POWER_SUPPLY_STATUS_FULL) ? true : false;
+	if (isStarRiverWatch()) {
+		soc_down_interval = SOC_DOWN_INTERVAL_SI630MAH;
+		discharge_sleep_time = 	DISCHARGE_SLEEP_TIME_SI630MAH_SEC;
+	}
+	else {
+		soc_down_interval = SOC_DOWN_INTERVAL_345MAH;
+		discharge_sleep_time = DISCHARGE_SLEEP_TIME_345MAH_SEC;
+	}
+
+	ui_soc = chg->ui_soc;
+	soc_up_jiffies = chg->soc_update_jiffies + SOC_UP_INTERVAL;
+	soc_down_jiffies = chg->soc_update_jiffies + soc_down_interval;
+
+	/*when the battery voltage is too low, vbat < vbat_cutoff + 50mV*/
+	if (chg->batt_vol <= (g_vbat_cutoff_uv + ULTRA_LOW_VOLTAGE_GAP_UV)) {
+		/*When the battery voltage is too low, ensure at least one adjust every low_vol_interval.*/
+		if (chg->batt_vol <= g_vbat_cutoff_uv) {
+			low_vol_interval = UTRAL_VOLTAGE_INTERVAL;
+		}
+		else if (charging) { /*if status=charging, but batery is discharging*/
+			low_vol_interval = CHARGE_LOW_VOLTAGE_INTERVAL;
+		}
+		else { /*discharge*/
+			low_vol_interval = DISCHARGE_LOW_VOLTAGE_INTERVAL;
+		}
+
+		vbat_uv_jiffies = chg->vbat_uv_jiffies + low_vol_interval;
+		update_delay = low_vol_interval;
+
+		/*Low voltage has been going on for a while*/
+		if ((chg->batt_vol <= g_vbat_cutoff_uv) && time_is_before_jiffies(vbat_uv_jiffies)) {
+			soc_down_jiffies = chg->soc_update_jiffies + low_vol_interval;
+			force_down = true;
+		}
+	}
+	else {
+		chg->vbat_uv_jiffies = jiffies;
+		force_down = false;
+	}
+
+	if (force_down) {
+		if (time_is_before_jiffies(soc_down_jiffies)) {
+			ui_soc = (ui_soc > 0) ? (ui_soc - 1) : 0;
+		}
+		goto check_update_time;
+	}
+
+	soc_gap = abs(chg->chip_soc - ui_soc);
+	/* Special handling after wake-up */
+	if (chg->sleep_time_sec > 0) {
+		ui_soc_update = true;
+
+		if (charging || full) {
+			soc_margin = chg->sleep_time_sec / CHARGE_SLEEP_TIME_SEC;
+		}
+		else {
+			soc_margin = chg->sleep_time_sec / discharge_sleep_time;
+		}
+
+		/*soc jump gap*/
+		if (soc_margin == 0) {
+			soc_update_gap = 1;
+		}
+		else {
+			soc_update_gap = soc_margin < soc_gap ? soc_margin : soc_gap;
+		}
+
+		pr_info("sleep_time_sec=%lu, soc_update_gap=%d\n", chg->sleep_time_sec, soc_update_gap);
+		chg->sleep_time_sec = 0;
+
+		if (ui_soc_update) {
+			if ((charging || full) && (chg->chip_soc > ui_soc)) { /*charging*/
+				ui_soc += soc_update_gap;
+				ui_soc = (ui_soc > 100) ? 100 : ui_soc;
+			}
+			else if ((!charging) && (!full) && (chg->chip_soc < ui_soc)) { /*discharge*/
+				ui_soc -= soc_update_gap;
+				ui_soc = (ui_soc < 0) ? 0 : ui_soc;
+			}
+			/*Prevent skipping of switch band mode soc*/
+			if ((chg->ui_soc > SWITCH_BAND_MODE_SOC_PCT) && (ui_soc < SWITCH_BAND_MODE_SOC_PCT)) {
+				ui_soc = SWITCH_BAND_MODE_SOC_PCT;
+			}
+			goto check_update_time;
+		}
+	}
+
+	/* Here ui_soc is only allowed to drop to 1% as low as possible */
+	if (charging || full) {
+		if ((ui_soc < chg->chip_soc)
+			&& time_is_before_jiffies(soc_up_jiffies)) {
+			ui_soc = (ui_soc < 100) ? (ui_soc + 1) : 100;
+		}
+		else if (full && time_is_before_jiffies(soc_up_jiffies)
+			&& (!isSellMode())
+			&& (!high_temp)) {
+			/*if status = full and chip_soc != 100, ui_soc++*/
+			/*but except sellmode and temp > 43C*/
+			ui_soc = (ui_soc < 100) ? (ui_soc + 1) : 100;
+		}
+		else if ((!soc_line_changed) && (chg->chip_soc < 99) \
+			&& ((chg->pre_chip_soc > chg->chip_soc)
+			&& time_is_before_jiffies(soc_down_jiffies))) {
+			/*if status=charging&full, but batery is discharging*/
+			ui_soc = (ui_soc > 1) ? (ui_soc - 1) : 1;
+		}
+		/*ui_soc > chg->chip_soc, do nothing until chg->chip_soc increase to ui_soc*/
+	}
+	else {
+		/*discharge*/
+		if ((ui_soc > chg->chip_soc)
+			&& time_is_before_jiffies(soc_down_jiffies)) {
+			ui_soc = (ui_soc > 1) ? (ui_soc - 1) : 1;
+		}
+		/*ui_soc < chg->chip_soc, do nothing until chg->chip_soc reduce to ui_soc*/
+	}
+
+check_update_time:
+	/* determine the next update time */
+	if (soc_gap) { /* ui_soc != chip_soc*/
+		update_delay = UPDATE_WORK_INTERVAL;
+	}
+	if (time_is_after_jiffies(soc_down_jiffies)) {
+		tmp = soc_down_jiffies - jiffies;
+		if (update_delay > tmp) {
+			update_delay = tmp;
+		}
+	}
+	if (time_is_after_jiffies(soc_up_jiffies)) {
+		tmp = soc_up_jiffies - jiffies;
+		if (update_delay > tmp) {
+			update_delay = tmp;
+		}
+	}
+
+	/*update ui_soc*/
+	if (chg->ui_soc != ui_soc) {
+		if (ui_soc > chg->ui_soc) {
+			/*if ui_soc increases, ensure this work executes once within SOC_UP_INTERVAL*/
+			tmp = SOC_UP_INTERVAL;
+		}
+		else {
+			/*if ui_soc decreases, ensure this work executes once within soc_down_interval*/
+			tmp = soc_down_interval;
+		}
+		if (update_delay > tmp) {
+			update_delay = tmp;
+		}
+		update_uisoc(chg, ui_soc);
+	}
+
+
+	pr_info("ui_soc=%d, chip_soc=%d, pre_chip_soc=%d, batt_vol=%d update_delay=%u, force_down=%d, charging=%d, soc_gap=%d\n",
+			chg->ui_soc, chg->chip_soc, chg->pre_chip_soc, chg->batt_vol, jiffies_to_msecs(update_delay), force_down, chg->batt_status, soc_gap);
+
+	chg->pre_chip_soc = chg->chip_soc;
+	if (update_delay > 0) {
+		schedule_delayed_work(&chg->adjust_uisoc_work, update_delay);
+	}
+}
+
+#define INIT_SOC_MAX_GAP                    2 /*allow 2% jump*/
+static int init_soc_calculate(struct smb_charger *chg, int chip_soc, int ref_soc)
+{
+	int ui_soc = ref_soc;
+	int soc_gap = 0;
+	bool charging, full;
+
+	soc_gap = abs(ref_soc - chip_soc);
+	charging = (chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) ? true : false;
+	full = (chg->batt_status == POWER_SUPPLY_STATUS_FULL) ? true : false;
+
+	if ((!charging) && (!full) && (ref_soc > chip_soc)) {
+		/*eg: discharge, ref_soc=90, chip_soc=86, then ui_soc=88,87,86...*/
+		/*eg: discharge, ref_soc=90, chip_soc=89, then ui_soc=89,88,87...*/
+		ui_soc = (soc_gap > INIT_SOC_MAX_GAP) ? (ref_soc - INIT_SOC_MAX_GAP) : chip_soc;
+		ui_soc = (ui_soc < 0) ? 0 : ui_soc;
+	}
+	else if ((charging || full) && (ref_soc < chip_soc)) {
+		/*eg: charging, ref_soc=9, chip_soc=13, then ui_soc=11,12,13...*/
+		/*eg: charging, ref_soc=9, chip_soc=10, then ui_soc=10,11,12...*/
+		ui_soc = (soc_gap > INIT_SOC_MAX_GAP) ? (ref_soc + INIT_SOC_MAX_GAP) : chip_soc;
+		ui_soc = (ui_soc > 100) ? 100 : ui_soc;
+	}
+	else {
+		/*discharge: ref_soc < chip_soc, or charging: ref_soc > chip_soc*/
+		/*eg: discharging, ref_soc=9, chip_soc=13, then ui_soc=9 util the chip_soc reduce to 9*/
+		/*eg: charging, init_soc=14, chip_soc=10, then ui_soc=14, util the chip_soc increase to 14*/
+		ui_soc = ref_soc;
+	}
+
+	return ui_soc;
+}
+
+void init_mcu_soc(struct smb_charger *chg)
+{
+	int mcu_soc = chg->mcu_soc;
+	int chip_soc = chg->chip_soc;
+	int ui_soc = mcu_soc;
+
+	ui_soc = init_soc_calculate(chg, chip_soc, mcu_soc);
+
+	pr_info("init_mcu_soc mcu_soc=%d, ui_soc=%d\n", mcu_soc, ui_soc);
+	update_uisoc(chg, ui_soc);
+	chg->mcu_soc_inited = true;
+}
+
+extern int pre_android_soc;
+void init_pmic_ponsoc(struct smb_charger *chg)
+{
+	int chip_soc = chg->chip_soc;
+	int ui_soc = pre_android_soc;
+
+	if (pre_android_soc == 0) {
+		/*the last shutdown was due to 0%*/
+		ui_soc = chip_soc;
+	}
+	else{
+		/*
+		 * if use the watch in band mode for a long time, the pre_android_soc is unreliable.
+		 * After a while (about 30 seconds), the function init_mcu_soc will show mcu_soc in UI.
+		 */
+		ui_soc = init_soc_calculate(chg, chip_soc, pre_android_soc);
+	}
+
+	pr_info("init_pmic_ponsoc pre_android_soc=%d, ui_soc=%d\n", pre_android_soc, ui_soc);
+	update_uisoc(chg, ui_soc);
+}
+
+extern bool jiffestart;
+static void soc_ratio_work(struct work_struct *work)
+{
+	struct smb_charger *chg = container_of(work, struct smb_charger, soc_ratio_work.work);
+
+	if ((chg->batt_status == POWER_SUPPLY_STATUS_CHARGING) && (chg->chip_soc == 99)) {
+		chg->chip_soc++;
+	}
+	notice_charging_time(chg, false);
+
+	pr_info("timeout chip_soc=%d\n", chg->chip_soc);
+	cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+	schedule_delayed_work(&chg->adjust_uisoc_work, 0);
+	jiffestart = false;
+}
 static void smblite_lib_pl_enable_work(struct work_struct *work)
 {
 	struct smb_charger *chg = container_of(work, struct smb_charger,
@@ -4526,6 +4888,8 @@ int smblite_lib_init(struct smb_charger *chg)
 
 	mutex_init(&chg->dpdm_lock);
 	mutex_init(&chg->dpdm_pulse_lock);
+	mutex_init(&chg->init_soc_lock);
+	mutex_init(&chg->update_uisoc_lock);
 	INIT_WORK(&chg->bms_update_work, bms_update_work);
 	INIT_WORK(&chg->jeita_update_work, jeita_update_work);
 	INIT_DELAYED_WORK(&chg->icl_change_work, smblite_lib_icl_change_work);
@@ -4537,6 +4901,11 @@ int smblite_lib_init(struct smb_charger *chg)
 					smblite_lib_typec_role_check_work);
 	INIT_DELAYED_WORK(&chg->pr_swap_detach_work,
 					smblite_lib_pr_swap_detach_work);
+	INIT_DELAYED_WORK(&chg->adjust_uisoc_work, adjust_uisoc_work);
+	INIT_DELAYED_WORK(&chg->soc_ratio_work, soc_ratio_work);
+	chg->charging_time = wakeup_source_register(chg->dev, "charging_time");
+	if (!chg->charging_time)
+		pr_err("charging_time registe failed\n");
 	chg->fake_capacity = -EINVAL;
 	chg->fake_batt_status = -EINVAL;
 	chg->sink_src_mode = UNATTACHED_MODE;
@@ -4609,6 +4978,8 @@ int smblite_lib_deinit(struct smb_charger *chg)
 {
 	switch (chg->mode) {
 	case PARALLEL_MASTER:
+		cancel_delayed_work_sync(&chg->adjust_uisoc_work);
+		cancel_delayed_work_sync(&chg->soc_ratio_work);
 		cancel_work_sync(&chg->bms_update_work);
 		cancel_work_sync(&chg->jeita_update_work);
 		cancel_delayed_work_sync(&chg->icl_change_work);

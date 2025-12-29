@@ -508,9 +508,7 @@ static bool geni_i2c_is_bus_recovery_required(struct geni_i2c_dev *gi2c)
 	 * BIT 1 is clk status. SE_GENI_IOS register set when CLK/SDA line
 	 * is pulled high.
 	 */
-	return (((geni_ios & 1) == 0) && (gi2c->err == -EPROTO ||
-					gi2c->err == -EBUSY ||
-					gi2c->err == -ETIMEDOUT));
+	return (((geni_ios & 3) != 0));
 }
 
 /**
@@ -1454,8 +1452,8 @@ static int geni_i2c_gsi_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			geni_ios = geni_read_reg(gi2c->base, SE_GENI_IOS);
 			if ((geni_ios & 0x3) != 0x3) { //SCL:b'1, SDA:b'0
 				I2C_LOG_ERR(gi2c->ipcl, false, gi2c->dev,
-					    "%s: IO lines not in good state\n",
-					    __func__);
+						"%s: IO lines not in good state, 0x%x, %d\n",
+						__func__, (geni_ios & 0x3), gi2c->is_i2c_rtl_based);
 					/* doing pending cancel only rtl based SE's */
 					if (gi2c->is_i2c_rtl_based) {
 						gi2c->prev_cancel_pending = true;
@@ -1554,12 +1552,14 @@ static int geni_i2c_xfer(struct i2c_adapter *adap,
 	geni_ios = geni_read_reg(gi2c->base, SE_GENI_IOS);
 	if ((geni_ios & 0x3) != 0x3) { //SCL:b'1, SDA:b'0
 		I2C_LOG_ERR(gi2c->ipcl, false, gi2c->dev,
-			    "IO lines in bad state, Power the slave\n");
-		/* for levm skip auto suspend timer */
-		if (!gi2c->is_le_vm) {
-			pm_runtime_mark_last_busy(gi2c->dev);
-			pm_runtime_put_autosuspend(gi2c->dev);
+			"IO lines in bad state, Power the slave 0x%02x %s\n", (geni_ios & 0x3),
+			(((geni_ios & 0x3) == 0x01) ? "SCL" : ((geni_ios & 0x3) == 0x02 ? "SDA" : "both")));
+		if (geni_i2c_bus_recovery(gi2c)) {
+			GENI_SE_ERR(gi2c->ipcl, true, gi2c->dev,
+			"%s:Bus Recovery failed\n", __func__);
 		}
+		pm_runtime_mark_last_busy(gi2c->dev);
+		pm_runtime_put_autosuspend(gi2c->dev);
 		atomic_set(&gi2c->is_xfer_in_progress, 0);
 		return -ENXIO;
 	}
@@ -1753,8 +1753,8 @@ static int geni_i2c_xfer(struct i2c_adapter *adap,
 				geni_ios = geni_read_reg(gi2c->base, SE_GENI_IOS);
 				if ((geni_ios & 0x3) != 0x3) { //SCL:b'1, SDA:b'0
 					I2C_LOG_DBG(gi2c->ipcl, true, gi2c->dev,
-						"%s: IO lines not in good state\n",
-						__func__);
+						"%s: IO lines not in good state, 0x%x\n",
+						__func__, (geni_ios & 0x3));
 					gi2c->prev_cancel_pending = true;
 					goto geni_i2c_txn_ret;
 				}

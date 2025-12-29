@@ -1369,6 +1369,8 @@ struct adc5_channels {
 		  _pre, _scale)						\
 
 static const struct adc5_channels adc5_chans_pmic[ADC5_MAX_CHANNEL] = {
+	[ADC5_GEN3_AMUX3_THM_30K_PU] = ADC5_CHAN_TEMP("batt_therm_30k_pu", 0,
+					SCALE_HW_CALIB_PM5_GEN3_BATT_THERM_30K)
 	[ADC5_GEN3_OFFSET_REF]		= ADC5_CHAN_VOLT("ref_gnd", 0,
 						SCALE_HW_CALIB_DEFAULT)
 	[ADC5_GEN3_1P25VREF]		= ADC5_CHAN_VOLT("vref_1p25", 0,

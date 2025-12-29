@@ -21,6 +21,12 @@
  */
 #define QBG_CONTEXT_LOCAL_BUF_SIZE	3072
 
+#define OPLUS_BATT_TEMP_NUM			9
+#define OPLUS_BATT_CURR_NUM			9
+#define OPLUS_BATT_MAX_MV_NUM		2
+#define OPLUS_CHG_I_LCDON_NUM		2
+#define OPLUS_RECHG_VFLT_NUM		3
+
 enum debug_mask {
 	QBG_DEBUG_BUS_READ	= BIT(0),
 	QBG_DEBUG_BUS_WRITE	= BIT(1),
@@ -243,6 +249,11 @@ struct qti_qbg {
 	int			vph_min_mv;
 	int			iterm_ma;
 	int			rconn_mohm;
+	int 		batt_temp_coeffs[OPLUS_BATT_TEMP_NUM];
+	int 		batt_current_coeffs[OPLUS_BATT_CURR_NUM];
+	int 		batt_max_mv_coeffs[OPLUS_BATT_MAX_MV_NUM];
+	int 		rechg_vflt_delta[OPLUS_RECHG_VFLT_NUM];
+	int 		chg_i_lcdon[OPLUS_CHG_I_LCDON_NUM];
 	unsigned long		previous_ep_time;
 	unsigned long		current_time;
 	int			context_count;

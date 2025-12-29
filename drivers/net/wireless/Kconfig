@@ -35,6 +35,7 @@ source "drivers/net/wireless/st/Kconfig"
 source "drivers/net/wireless/ti/Kconfig"
 source "drivers/net/wireless/zydas/Kconfig"
 source "drivers/net/wireless/quantenna/Kconfig"
+source "drivers/net/wireless/bcmdhd/Kconfig"
 
 config PCMCIA_RAYCS
 	tristate "Aviator/Raytheon 2.4GHz wireless support"
@@ -110,5 +111,10 @@ config VIRT_WIFI
 	help
 	  This option adds support for ethernet connections to appear as if they
 	  are wifi connections through a special rtnetlink device.
+
+config WLAN_BES
+	tristate "BES WLAN Device"
+	help
+	  If you have a wireless card belonging to this class, say Y.
 
 endif # WLAN

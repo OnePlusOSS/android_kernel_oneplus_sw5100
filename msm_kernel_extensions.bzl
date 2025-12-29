@@ -38,3 +38,9 @@ def get_vendor_ramdisk_binaries(target, flavor = None):
 
 def get_gki_ramdisk_prebuilt_binary():
     return None
+
+def get_kernel_dir():
+    return "msm-kernel"
+
+def get_kernel_modules_dir():
+    return "../../vendor/qcom/opensource/monaco"

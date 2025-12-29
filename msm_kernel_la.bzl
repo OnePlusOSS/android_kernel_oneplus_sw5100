@@ -10,11 +10,9 @@ load(
     "kernel_modules_install",
     "kernel_uapi_headers_cc_library",
     "merged_kernel_uapi_headers",
-    "super_image",
-    "unsparsed_image",
 )
 load(
-    "//build:msm_kernel_extensions.bzl",
+    "msm_kernel_extensions.bzl",
     "define_extras",
     "get_build_config_fragments",
     "get_dtb_list",
@@ -31,6 +29,7 @@ load(":avb_boot_img.bzl", "avb_sign_boot_image")
 load(":image_opts.bzl", "boot_image_opts")
 load(":target_variants.bzl", "la_variants")
 load(":modules.bzl", "COMMON_GKI_MODULES_LIST")
+load(":msm_kernel_extensions.bzl", "get_kernel_dir")
 
 def _define_build_config(
         msm_target,
@@ -51,7 +50,7 @@ def _define_build_config(
         name = "{}_build_config_bazel".format(target),
         out = "build.config.msm.{}.generated".format(target),
         content = [
-            'KERNEL_DIR="msm-kernel"',
+            'KERNEL_DIR="{}"'.format(get_kernel_dir()),
             "VARIANTS=({})".format(" ".join(la_variants)),
             "MSM_ARCH={}".format(msm_target.replace("-", "_")),
             "VARIANT={}".format(variant.replace("-", "_")),
@@ -112,6 +111,7 @@ def _define_kernel_build(
         target,
         base_kernel,
         in_tree_module_list,
+        ext_module_list,
         dtb_list,
         dtbo_list,
         dtstree,
@@ -167,11 +167,13 @@ def _define_kernel_build(
     kernel_modules_install(
         name = "{}_modules_install".format(target),
         kernel_build = ":{}".format(target),
+        kernel_modules = ext_module_list,
     )
 
     merged_kernel_uapi_headers(
         name = "{}_merged_kernel_uapi_headers".format(target),
         kernel_build = ":{}".format(target),
+        kernel_modules = ext_module_list,
     )
 
     kernel_compile_commands(
@@ -285,17 +287,6 @@ def _define_image_build(
         output_group = "vendor_dlkm.img",
     )
 
-    super_image(
-        name = "{}_super_image".format(target),
-        system_dlkm_image = ":{}_system_dlkm_image_file".format(target),
-        vendor_dlkm_image = ":{}_vendor_dlkm_image_file".format(target),
-    )
-
-    unsparsed_image(
-        name = "{}_unsparsed_image".format(target),
-        src = "{}_super_image".format(target),
-        out = "super_unsparsed.img",
-    )
 
 def _define_kernel_dist(
         target,
@@ -341,11 +332,10 @@ def _define_kernel_dist(
         "{}_headers".format(base_kernel),
         ":{}".format(target),
         ":{}_images".format(target),
-        ":{}_super_image".format(target),
-        ":{}_unsparsed_image".format(target),
         ":{}_merged_kernel_uapi_headers".format(target),
         ":{}_build_config".format(target),
         ":{}_system_dlkm_module_blocklist".format(target),
+        ":{}_modules_install".format(target),
     ])
 
     msm_dist_targets.append("{}_avb_sign_boot_image".format(target))
@@ -414,6 +404,7 @@ def define_msm_la(
         msm_target,
         variant,
         in_tree_module_list,
+        ext_module_list,
         kmi_enforced = True,
         boot_image_opts = boot_image_opts()):
     """Top-level kernel build definition macro for an MSM platform
@@ -463,6 +454,7 @@ def define_msm_la(
         target,
         base_kernel,
         in_tree_module_list,
+        ext_module_list,
         dtb_list,
         dtbo_list,
         dtstree,

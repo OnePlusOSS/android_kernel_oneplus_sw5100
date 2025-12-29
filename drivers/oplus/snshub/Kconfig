@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2018-2020 Oplus. All rights reserved.
+
+config OPLUS_SNSHUB
+	tristate "Oplus sensor hub"
+	default n
+	help
+	  Oplus mcu sensor hub misc driver
+
+config OPLUS_INTER_CHIP_COMM
+	tristate "Oplus Inter-chip communication driver"
+	default n
+	help
+	  Oplus Inter-chip communication master driver
+
+config OPLUS_INTER_CHIP_COMM_BT
+	tristate "Oplus Inter-chip communication bt driver"
+	default n
+	help
+	  Oplus Inter-chip communication master bt driver
